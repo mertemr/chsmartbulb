@@ -1,0 +1,8 @@
+* text=auto eol=lf
+
+# Reverse engineering scripts and raw results: kept for reference, not project code.
+research/** linguist-vendored
+research/results/** -diff
+
+docs/** linguist-documentation
+uv.lock linguist-generated
