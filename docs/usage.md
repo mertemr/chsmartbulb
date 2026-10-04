@@ -89,10 +89,11 @@ chsmartbulb --host laptop.local --token SECRET audio-agent
 While an agent is connected, `music` and `spectrum` follow its feed; when it leaves, the service
 goes back to listening on its own machine. `status` shows which one is in use.
 
-The agent needs only the `audio` extra, no Bluetooth. Capture uses `parec` where it exists and the
-`soundcard` package otherwise, which is how Windows is meant to work (WASAPI loopback of the
-default output). `--audio-backend` forces one. The `soundcard` path has been run on Linux only;
-on Windows it is untested so far:
+The agent needs only the `audio` extra, no Bluetooth. Capture uses `parec` where it exists and
+WASAPI loopback of the default output on Windows (through PyAudioWPatch, which the extra pulls in
+there). `--audio-backend` forces one of `parec`, `wasapi` or `soundcard`; the last needs the
+`soundcard` package and does not work with every Windows output device. `--audio-device NAME`
+picks an output by part of its name instead of the default one.
 
 ```bash
 pip install "chsmartbulb[audio] @ git+https://github.com/mertemr/chsmartbulb"
