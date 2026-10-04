@@ -42,6 +42,7 @@ turned out wrong. Scripts are in [`research/`](../research), raw output in
 | 20 | Can another machine drive the effects? | Service on TCP, agent feeding analysis from a null sink | Light follows the agent's feed with either capture backend | |
 | 21 | Does the agent work from Windows? | Agent on a Windows desktop capturing its output through WASAPI loopback, light read back on the service | Light follows the music playing on the desktop | |
 | 22 | Do the stereo position and the beat sensitivity work on captured audio? | Panned test signal into a null sink, analysis and effect output printed | Position measured as played; sensitivity 0 dropped the soft accents, 1 kept them all | |
+| 23 | Does the screen capture run against the real mss library? | `ScreenCapture` on an XWayland display | Runs, 4.5 ms per 1080p frame; XWayland shows mss a black screen, so the colour itself is untested | |
 
 ## Wrong turns
 

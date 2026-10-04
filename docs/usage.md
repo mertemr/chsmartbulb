@@ -26,6 +26,7 @@ export CHSMARTBULB_ADDRESS=AA:BB:CC:DD:EE:FF
 | `raw HEX` | Send one raw frame; prints the answer to a query |
 | `daemon [--listen [HOST:]PORT]` | Run the background service |
 | `audio-agent` | Analyse this machine's audio and feed it to a service |
+| `screen-agent` | Watch this machine's screen and feed its colour to a service |
 
 `--host HOST[:PORT]` sends any command to a service on another machine instead.
 
@@ -99,6 +100,23 @@ picks an output by part of its name instead of the default one.
 pip install "chsmartbulb[audio] @ git+https://github.com/mertemr/chsmartbulb"
 ```
 
+### The screen from another machine
+
+The `screen` effect follows a screen, which is usually not on the machine that holds the Bluetooth
+link. Run the agent where the screen is: it reduces the picture to one colour about 15 times a
+second and sends only that colour.
+
+```bash
+chsmartbulb --host laptop.local --token SECRET screen-agent
+```
+
+It needs the `screen` extra (numpy and mss), no Bluetooth. `--monitor N` picks a monitor other
+than the first; `0` takes all of them as one picture. Both agents can run side by side.
+
+```bash
+pip install "chsmartbulb[screen] @ git+https://github.com/mertemr/chsmartbulb"
+```
+
 ### Socket protocol
 
 One JSON object per line in each direction. Replies carry `"ok"` and, on failure, `"error"`.
@@ -116,6 +134,7 @@ A network connection must start with `{"cmd": "auth", "token": "..."}`. An agent
 `{"cmd": "audio", "levels": [bass, mid, treble], "onset": 2.4, "balance": -0.2}` for each analysed
 block; those are not answered. `onset` is how far the bass stands above its recent average and
 `balance` runs from -1 (left) to 1 (right); both are left out when there is nothing to report.
+A screen agent sends `{"cmd": "screen", "color": "#rrggbb"}` whenever the colour changes.
 
 ## Effects
 
@@ -134,6 +153,7 @@ block; those are not answered. `onset` is how far the bass stands above its rece
 | `spectrum` | Bass, mids and treble as red, green and blue | `release`, `delay` |
 | `volume` | One colour, as bright as the sound is loud | `color`, `release`, `floor`, `delay` |
 | `stereo` | Blend two colours by where the sound sits | `left`, `right`, `width`, `release`, `delay` |
+| `screen` | Follow the colour of the screen | `smoothing`, `saturation` |
 
 ```bash
 chsmartbulb effect breathe -c 00ff00 -p 3
@@ -181,6 +201,22 @@ Bluetooth outputs usually need 0.15 to 0.3; wired outputs need none.
 
 This is separate from the bulb's own `native music` mode, which reacts to sound played through
 the bulb's speaker.
+
+### Following the screen
+
+`screen` shows the colour of what is on a monitor. The bulb is a single light, so the whole
+picture becomes one colour; colourful areas count for more than grey ones, or most pictures would
+come out a dull white.
+
+```bash
+chsmartbulb effect screen -s saturation=2 -s smoothing=0.4
+```
+
+`smoothing` is how many seconds the light takes to follow a change and `saturation` multiplies the
+colourfulness (1 leaves it as on screen). The service follows its own screen unless a
+[screen agent](#the-screen-from-another-machine) is connected. Capture goes through mss, which
+works on Windows, macOS and X11 but not on Wayland, and has not been tried on a real picture yet:
+on the development machine it could only be run against an empty XWayland display.
 
 ## Library
 
@@ -284,7 +320,8 @@ chsmartbulb.Light          device-independent interface (colour, brightness, on/
       BleTransport         BLE GATT via bleak
 chsmartbulb.effects        effect engine, depends on Light only
 chsmartbulb.music          audio capture and analysis for the sound-reactive effects
+chsmartbulb.screen         screen capture reduced to one colour, for the screen effect
 chsmartbulb.catalog        effects by name with plain parameters
 chsmartbulb.service        background service and its socket protocol
-chsmartbulb.client         requests to a running service, and the audio agent
+chsmartbulb.client         requests to a running service, and the audio and screen agents
 ```
