@@ -80,8 +80,8 @@ Commands: `status`, `on`, `off`, `color`, `brightness`, `effect`, `native`, `sto
 | `candle` | Uneven flicker | `color`, `depth` |
 | `palette` | Drift through a list of colours | `colors`, `hold`, `fade_in` |
 | `police` | Alternate red and blue | `period` |
-| `music` | Flash on the beat | `color`, `decay` |
-| `spectrum` | Bass, mids and treble as red, green and blue | `release` |
+| `music` | Flash on the beat | `color`, `decay`, `delay` |
+| `spectrum` | Bass, mids and treble as red, green and blue | `release`, `delay` |
 
 ```bash
 chsmartbulb effect breathe -c 00ff00 -p 3
@@ -98,6 +98,15 @@ with PulseAudio and PipeWire.
 
 `--audio-device SOURCE` picks a different source, for example the monitor of one particular
 output (`pactl list short sources` shows the names).
+
+The capture hears the sound before a Bluetooth speaker or headphones play it, so the light runs
+ahead of what you hear. `delay` holds the light back by that many seconds (up to 2):
+
+```bash
+chsmartbulb effect music -s delay=0.2
+```
+
+Bluetooth outputs usually need 0.15 to 0.3; wired outputs need none.
 
 This is separate from the bulb's own `native music` mode, which reacts to sound played through
 the bulb's speaker.

@@ -37,6 +37,8 @@ turned out wrong. Scripts are in [`research/`](../research), raw output in
 | 15 | Does the library work physically? | `lib_check.py` | Brightness, on/off, fade, effects and reconnect confirmed | |
 | 16 | Can timers be written? | Disable a stored timer, read back | Works; the light is not affected | `exp.jsonl` |
 | 17 | Does the bleak transport work? | `ble_lib_check.py` | Yes once LE is up; BlueZ will not open LE by address | `ble_lib_check.txt` |
+| 18 | Does control need the audio link? | Card profile off, A2DP disconnected, full disconnect | Works without audio; after a full disconnect BlueZ grabs LE first | |
+| 19 | Do the sound-reactive effects and their delay work? | Beat played into a null sink, light read back | Follows the beat; first light moves by the configured delay | |
 
 ## Wrong turns
 
@@ -50,4 +52,6 @@ turned out wrong. Scripts are in [`research/`](../research), raw output in
 - **"Connecting by address with bleak is enough."** BlueZ chose the Classic bearer, reported the
   device as connected, and the first GATT write failed. The transport now does a GATT read while
   opening so this shows up as a connection error.
+- **"BlueZ only reconnects LE after an LE session."** It does so after Classic sessions too, once
+  it has the bulb's GATT services cached.
 - Python builds downloaded by `uv` have no Bluetooth sockets, so the project is pinned to the system interpreter.

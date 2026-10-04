@@ -75,8 +75,10 @@ A way to get the LE link up without root is to connect a raw L2CAP ATT socket on
 bleak can be given a `BLEDevice` carrying the object path
 ([`research/ble_lib_check.py`](../research/ble_lib_check.py)).
 
-After LE has been used, bluetoothd reconnects LE by itself whenever the link drops, which blocks
-the audio connection. To go back to Classic, disconnect and connect the audio profile right away:
+Once bluetoothd has connected over LE and learned the bulb's GATT services, it keeps
+reconnecting LE by itself whenever the bulb is not connected over Classic. That blocks both the
+audio connection and the RFCOMM control channel, which then time out. To go back to Classic,
+disconnect and connect the audio profile right away:
 
 ```bash
 bluetoothctl disconnect AA:BB:CC:DD:EE:FF
@@ -88,6 +90,25 @@ busctl call org.bluez /org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF org.bluez.Device1 Co
 
 On Linux the practical choice is RFCOMM. The BLE transport matters on platforms without RFCOMM
 access and for phones.
+
+## Using the bulb without its audio
+
+The control channel does not depend on the audio stream.
+
+| Setup | Control | Notes |
+|---|---|---|
+| Audio connected, sound sent to another output | works | The bulb's audio link idles |
+| Audio card profile set to `off` | works | The sink disappears and the default output moves elsewhere; an open control link survives the switch in both directions |
+| A2DP profile disconnected in BlueZ | works | The profile came back by itself after about 14 s |
+| Bluetooth fully disconnected, then RFCOMM alone | not established | On the test machine bluetoothd connected LE first (see above), so the attempt timed out |
+
+To keep the bulb connected but out of the audio path, switch its card profile off:
+
+```bash
+pactl set-card-profile bluez_card.AA_BB_CC_DD_EE_FF off
+```
+
+`a2dp-sink` in place of `off` brings the speaker back.
 
 ## Stored timers
 
