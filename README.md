@@ -14,6 +14,8 @@ a command line tool for it.
   follow whatever audio the computer is playing
 - A background service that keeps the connection, runs effects and restores the light when the
   bulb comes back after losing power
+- Control from other machines on the network, and an audio agent so the light can follow music
+  playing on a computer that has no Bluetooth
 - Reading the name, model, colour and stored timers; enabling and disabling timers
 - Bluetooth Classic (RFCOMM) and BLE transports
 

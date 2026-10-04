@@ -24,7 +24,10 @@ export CHSMARTBULB_ADDRESS=AA:BB:CC:DD:EE:FF
 | `timers` | List schedule entries stored in the bulb |
 | `timer INDEX on\|off` | Enable or disable a stored entry |
 | `raw HEX` | Send one raw frame; prints the answer to a query |
-| `daemon` | Run the background service |
+| `daemon [--listen [HOST:]PORT]` | Run the background service |
+| `audio-agent` | Analyse this machine's audio and feed it to a service |
+
+`--host HOST[:PORT]` sends any command to a service on another machine instead.
 
 Without the service every invocation is a separate connection. The bulb does not report
 brightness and forgets nothing but the colour mix, so in that mode `on` after `off` comes back
@@ -54,6 +57,47 @@ to `~/.config/systemd/user/`, fill in the address and the path, then:
 systemctl --user enable --now chsmartbulb
 ```
 
+### Other machines
+
+The bulb takes one Bluetooth connection, so one machine owns it and the others go through that
+machine's service. Start the service with a network port and a shared secret:
+
+```bash
+export CHSMARTBULB_TOKEN=$(python3 -c "import secrets; print(secrets.token_urlsafe(16))")
+chsmartbulb daemon --listen 8377
+```
+
+From anywhere else on the network, with the same token:
+
+```bash
+chsmartbulb --host laptop.local --token SECRET color red
+```
+
+The traffic is not encrypted and the token travels in clear text, so keep this to a network you
+trust. Without a token the service refuses to listen on the network at all.
+
+### Audio from another machine
+
+The sound-reactive effects need to hear the music, which may be playing on a machine that has no
+Bluetooth. Run the agent there: it analyses the audio locally and sends only band levels and
+beats to the service, never the audio itself.
+
+```bash
+chsmartbulb --host laptop.local --token SECRET audio-agent
+```
+
+While an agent is connected, `music` and `spectrum` follow its feed; when it leaves, the service
+goes back to listening on its own machine. `status` shows which one is in use.
+
+The agent needs only the `audio` extra, no Bluetooth. Capture uses `parec` where it exists and the
+`soundcard` package otherwise, which is how Windows is meant to work (WASAPI loopback of the
+default output). `--audio-backend` forces one. The `soundcard` path has been run on Linux only;
+on Windows it is untested so far:
+
+```bash
+pip install "chsmartbulb[audio] @ git+https://github.com/mertemr/chsmartbulb"
+```
+
 ### Socket protocol
 
 One JSON object per line in each direction. Replies carry `"ok"` and, on failure, `"error"`.
@@ -66,6 +110,10 @@ One JSON object per line in each direction. Replies carry `"ok"` and, on failure
 
 Commands: `status`, `on`, `off`, `color`, `brightness`, `effect`, `native`, `stop`, `effects`,
 `info`, `timers`, `timer`, `raw`.
+
+A network connection must start with `{"cmd": "auth", "token": "..."}`. An agent then sends
+`{"cmd": "audio", "levels": [bass, mid, treble], "beat": true}` for each analysed block; those are
+not answered.
 
 ## Effects
 
@@ -215,4 +263,5 @@ chsmartbulb.effects        effect engine, depends on Light only
 chsmartbulb.music          audio capture and analysis for the sound-reactive effects
 chsmartbulb.catalog        effects by name with plain parameters
 chsmartbulb.service        background service and its socket protocol
+chsmartbulb.client         requests to a running service, and the audio agent
 ```
