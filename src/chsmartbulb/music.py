@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import math
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -33,6 +34,7 @@ _SILENCE = 1e-4
 _BEAT_RATIO = 1.5  # bass must exceed its recent average by this factor
 _BEAT_GAP = 0.15  # seconds; caps detection at 400 bpm
 _DARK = 1 / 255
+_MAX_DELAY = 2.0
 
 
 @dataclass(frozen=True)
@@ -50,6 +52,7 @@ class AudioSource(Protocol):
     levels: Levels
     beats: int
     last_beat: float
+    delay: float
 
     def clock(self) -> float: ...
 
@@ -63,6 +66,10 @@ class MusicSource:
 
     :meth:`feed` does the analysis and can be driven by anything; :meth:`start`
     feeds it from the system's audio output.
+
+    ``delay`` holds the results back by that many seconds. The capture hears the
+    sound before a Bluetooth speaker or headphones play it, so without a delay
+    the light runs ahead of what you hear.
     """
 
     def __init__(
@@ -90,6 +97,9 @@ class MusicSource:
         self._bass_average = 0.0
         self._pending = bytearray()
         self._task: asyncio.Task[None] | None = None
+        self._last_onset = -math.inf
+        self._held: deque[tuple[float, Levels, bool]] = deque()
+        self.delay = 0.0
         self.levels = Levels()
         self.beats = 0
         self.last_beat = -math.inf
@@ -114,15 +124,21 @@ class MusicSource:
         for i, value in enumerate(values):
             self._peaks[i] = max(value, self._peaks[i] * self._decay)
             levels.append(value / self._peaks[i] if self._peaks[i] > _SILENCE else 0.0)
-        self.levels = Levels(*levels)
 
         bass = values[0]
         now = self.clock()
-        if bass > _SILENCE and bass > _BEAT_RATIO * self._bass_average and now - self.last_beat > _BEAT_GAP:
-            self.beats += 1
-            self.last_beat = now
+        beat = bass > _SILENCE and bass > _BEAT_RATIO * self._bass_average and now - self._last_onset > _BEAT_GAP
+        if beat:
+            self._last_onset = now
         # fast enough to catch up with a sustained note before the gap allows another beat
         self._bass_average += 0.25 * (bass - self._bass_average)
+
+        self._held.append((now + self.delay, Levels(*levels), beat))
+        while self._held and self._held[0][0] <= now:
+            due, self.levels, was_beat = self._held.popleft()
+            if was_beat:
+                self.beats += 1
+                self.last_beat = due
 
     async def start(self) -> None:
         """Begin capturing the system's audio output in the background."""
@@ -165,11 +181,19 @@ class MusicSource:
             await process.wait()
 
 
-def music_pulse(source: AudioSource, color: Color | None = None, decay: float = 5.0) -> Effect:
+def _set_delay(source: AudioSource, delay: float) -> None:
+    if not 0.0 <= delay <= _MAX_DELAY:
+        raise ValueError(f"delay must be within 0..{_MAX_DELAY:g} seconds")
+    source.delay = delay
+
+
+def music_pulse(source: AudioSource, color: Color | None = None, decay: float = 5.0, delay: float = 0.0) -> Effect:
     """Flash on every beat and glow with the bass in between.
 
-    Without a ``color`` the hue steps to a new one on each beat.
+    Without a ``color`` the hue steps to a new one on each beat. ``delay`` holds
+    the light back to line up with a late audio output.
     """
+    _set_delay(source, delay)
 
     def effect(t: float) -> Color:
         flash = math.exp(-decay * (source.clock() - source.last_beat))
@@ -182,8 +206,9 @@ def music_pulse(source: AudioSource, color: Color | None = None, decay: float = 
     return effect
 
 
-def music_spectrum(source: AudioSource, release: float = 3.0) -> Effect:
+def music_spectrum(source: AudioSource, release: float = 3.0, delay: float = 0.0) -> Effect:
     """Bass drives red, mids green and treble blue; ``release`` is the fall rate per second."""
+    _set_delay(source, delay)
     shown = [0.0, 0.0, 0.0]
     last = 0.0
 

@@ -41,9 +41,19 @@ _ENTRIES = [
     ),
     EffectInfo("police", "alternate red and blue", _police, {"period": 1.0}),
     EffectInfo(
-        "music", "flash on the beat of the computer's audio", music.music_pulse, {"color": None, "decay": 5.0}, True
+        "music",
+        "flash on the beat of the computer's audio",
+        music.music_pulse,
+        {"color": None, "decay": 5.0, "delay": 0.0},
+        needs_audio=True,
     ),
-    EffectInfo("spectrum", "bass, mids, treble as red, green, blue", music.music_spectrum, {"release": 3.0}, True),
+    EffectInfo(
+        "spectrum",
+        "bass, mids, treble as red, green, blue",
+        music.music_spectrum,
+        {"release": 3.0, "delay": 0.0},
+        needs_audio=True,
+    ),
 ]
 
 CATALOG: dict[str, EffectInfo] = {info.name: info for info in _ENTRIES}

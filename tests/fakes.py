@@ -172,6 +172,7 @@ class FakeMusic:
         self.beats = 0
         self.last_beat = -math.inf
         self.now = 0.0
+        self.delay = 0.0
         self.running = False
         FakeMusic.created.append(self)
 

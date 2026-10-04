@@ -111,6 +111,32 @@ def test_steady_bass_and_silence_produce_no_beats():
     assert source.beats == 1
 
 
+def test_delay_holds_levels_and_beats_back():
+    clock = Clock()
+    source = music.MusicSource(clock=clock)
+    source.delay = 0.3
+    feed(source, clock, tone(80, 0.1))
+    assert (source.levels, source.beats) == (music.Levels(), 0)  # heard, not shown yet
+    feed(source, clock, silence(0.15))
+    assert source.beats == 0
+    feed(source, clock, silence(0.1))
+    assert source.beats == 1
+    assert source.last_beat == pytest.approx(0.3, abs=0.03)  # the kick started at 0
+    assert source.levels.bass > 0.9  # still showing the kick while the capture is already silent
+    feed(source, clock, silence(0.4))
+    assert source.levels == music.Levels()
+
+
+def test_delay_is_set_through_the_effect_parameters():
+    source = FakeMusic()
+    catalog.create("music", {"delay": 0.25}, audio=source)
+    assert source.delay == 0.25
+    catalog.create("spectrum", {}, audio=source)
+    assert source.delay == 0.0
+    with pytest.raises(ValueError, match="delay"):
+        catalog.create("music", {"delay": 5}, audio=source)
+
+
 def test_music_pulse_flashes_on_a_beat_and_changes_hue():
     source = FakeMusic()
     pulse = music.music_pulse(source)
