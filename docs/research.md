@@ -40,6 +40,7 @@ turned out wrong. Scripts are in [`research/`](../research), raw output in
 | 18 | Does control need the audio link? | Card profile off, A2DP disconnected, full disconnect | Works without audio; after a full disconnect BlueZ grabs LE first | |
 | 19 | Do the sound-reactive effects and their delay work? | Beat played into a null sink, light read back | Follows the beat; first light moves by the configured delay | |
 | 20 | Can another machine drive the effects? | Service on TCP, agent feeding analysis from a null sink | Light follows the agent's feed with either capture backend | |
+| 21 | Does the agent work from Windows? | Agent on a Windows desktop capturing its output through WASAPI loopback, light read back on the service | Light follows the music playing on the desktop | |
 
 ## Wrong turns
 
