@@ -25,6 +25,8 @@ Effect = Callable[[float], Color]
 #: The CHSmartBulb follows about 25 colour changes per second; 20 leaves headroom.
 DEFAULT_FPS = 20.0
 
+WARM = Color(r=255, g=110, b=20)
+
 
 async def play(
     light: Light,
@@ -166,3 +168,19 @@ def sequence(
 def dimmed(effect: Effect, level: float) -> Effect:
     """Scale another effect's output."""
     return lambda t: effect(t).scaled(level)
+
+
+def candle(color: Color = WARM, depth: float = 0.6) -> Effect:
+    """Uneven flicker: ``depth`` is how far the flame dips, 0 (steady) to 1 (to dark)."""
+
+    def effect(t: float) -> Color:
+        # three sines with unrelated frequencies never line up, which reads as random
+        wobble = (math.sin(7.3 * t) + math.sin(12.1 * t + 1.3) + math.sin(23.7 * t + 0.5)) / 3
+        return color.scaled(1.0 - depth * (0.5 + 0.5 * wobble))
+
+    return effect
+
+
+def palette(colors: Sequence[Color], hold: float = 2.0, fade_in: float = 1.0) -> Effect:
+    """Drift through ``colors`` in order, holding each and blending into the next."""
+    return sequence([(color, hold, fade_in) for color in colors])
