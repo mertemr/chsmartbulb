@@ -4,6 +4,7 @@ import asyncio
 import math
 import sys
 import types
+from typing import ClassVar
 
 import pytest
 
@@ -164,9 +165,126 @@ def test_capture_backend_follows_what_the_machine_has(monkeypatch):
     assert source._pick_backend() == "parec"
     monkeypatch.setattr(music.shutil, "which", lambda name: None)
     assert source._pick_backend() == "soundcard"
+    monkeypatch.setattr(music.sys, "platform", "win32")
+    assert source._pick_backend() == "wasapi"
     assert music.MusicSource(backend="parec")._pick_backend() == "parec"
     with pytest.raises(ValueError, match="backend"):
         music.MusicSource(backend="alsa")
+
+
+class FakePortAudio:
+    """The slice of PyAudioWPatch the WASAPI backend uses, with a 48 kHz stereo output."""
+
+    paInt16 = 8
+    paContinue = 0
+    devices: ClassVar = [
+        {"index": 3, "name": "Headphones [Loopback]", "maxInputChannels": 2, "defaultSampleRate": 44100.0},
+        {"index": 7, "name": "Speakers (USB DAC) [Loopback]", "maxInputChannels": 2, "defaultSampleRate": 48000.0},
+    ]
+    instances: ClassVar[list] = []
+
+    class Stream:
+        def __init__(self):
+            self.active = True
+            self.closed = False
+
+        def is_active(self):
+            return self.active
+
+        def stop_stream(self):
+            self.active = False
+
+        def close(self):
+            self.closed = True
+
+    def __init__(self):
+        self.opened = None
+        self.callback = None
+        self.stream = None
+        self.terminated = False
+        FakePortAudio.instances.append(self)
+
+    def get_default_wasapi_loopback(self):
+        return self.devices[1]
+
+    def get_loopback_device_info_generator(self):
+        return iter(self.devices)
+
+    def open(self, **options):
+        self.opened = options
+        self.callback = options["stream_callback"]
+        self.stream = FakePortAudio.Stream()
+        return self.stream
+
+    def terminate(self):
+        self.terminated = True
+
+
+def test_wasapi_capture_mixes_down_and_analyses_at_the_device_rate(monkeypatch):
+    FakePortAudio.instances.clear()
+    fake = types.SimpleNamespace(PyAudio=FakePortAudio, paInt16=8, paContinue=0)
+    monkeypatch.setitem(sys.modules, "pyaudiowpatch", fake)
+
+    async def scenario():
+        source = music.MusicSource(backend="wasapi")
+        await source.start()
+        await asyncio.sleep(0.01)
+        portaudio = FakePortAudio.instances[-1]
+        assert portaudio.opened["rate"] == 48000
+        assert portaudio.opened["channels"] == 2
+        assert portaudio.opened["input_device_index"] == 7
+        assert portaudio.opened["frames_per_buffer"] == 1024  # twice the block of the 22 kHz capture
+
+        t = np.arange(1024 * 8) / 48000
+        left = (0.5 * np.sin(2 * math.pi * 100 * t) * 32767).astype("<i2")
+        stereo = np.stack([left, left], axis=1).tobytes()
+        assert portaudio.callback(stereo, 1024 * 8, None, 0) == (None, 0)
+        await asyncio.sleep(0.01)
+        assert source.levels.bass > 0.9
+        assert source.levels.treble < 0.1
+
+        await source.stop()
+        assert (portaudio.stream.active, portaudio.stream.closed, portaudio.terminated) == (False, True, True)
+
+    asyncio.run(scenario())
+
+
+def test_wasapi_capture_finds_an_output_by_name_and_reports_a_bad_one(monkeypatch):
+    FakePortAudio.instances.clear()
+    fake = types.SimpleNamespace(PyAudio=FakePortAudio, paInt16=8, paContinue=0)
+    monkeypatch.setitem(sys.modules, "pyaudiowpatch", fake)
+
+    async def scenario():
+        source = music.MusicSource(backend="wasapi", device="headphones")
+        await source.start()
+        await asyncio.sleep(0.01)
+        assert FakePortAudio.instances[-1].opened["rate"] == 44100
+        await source.stop()
+
+        missing = music.MusicSource(backend="wasapi", device="hdmi")
+        await missing.start()
+        with pytest.raises(SmartBulbError, match="no output matches 'hdmi'; available: Headphones"):
+            await missing.wait()
+        assert FakePortAudio.instances[-1].terminated
+
+    asyncio.run(scenario())
+
+
+def test_wasapi_capture_reports_a_stream_that_dies(monkeypatch):
+    FakePortAudio.instances.clear()
+    fake = types.SimpleNamespace(PyAudio=FakePortAudio, paInt16=8, paContinue=0)
+    monkeypatch.setitem(sys.modules, "pyaudiowpatch", fake)
+    monkeypatch.setattr(music, "_STREAM_POLL", 0.001)
+
+    async def scenario():
+        source = music.MusicSource(backend="wasapi")
+        await source.start()
+        await asyncio.sleep(0.005)
+        FakePortAudio.instances[-1].stream.active = False  # the output device went away
+        with pytest.raises(SmartBulbError, match="stopped unexpectedly"):
+            await source.wait()
+
+    asyncio.run(scenario())
 
 
 def test_soundcard_capture_feeds_the_analysis_and_names_its_failures(monkeypatch):

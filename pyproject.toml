@@ -23,8 +23,8 @@ Documentation = "https://github.com/mertemr/chsmartbulb/tree/main/docs"
 ble = ["bleak>=0.22"]
 audio = [
     "numpy>=1.24",
-    # loopback capture where there is no parec
-    "soundcard>=0.4.3; sys_platform == 'win32'",
+    # WASAPI loopback capture; Linux uses the parec tool instead
+    "PyAudioWPatch>=0.2.12; sys_platform == 'win32'",
 ]
 
 [project.scripts]
@@ -89,7 +89,7 @@ python-platform = "linux"
 exclude = ["research"]
 
 [tool.ty.analysis]
-allowed-unresolved-imports = ["bleak", "bleak.**", "soundcard"]
+allowed-unresolved-imports = ["bleak", "bleak.**", "pyaudiowpatch", "soundcard"]
 
 [tool.uv]
 # uv's downloadable Python builds are compiled without Bluetooth sockets.

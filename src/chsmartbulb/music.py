@@ -3,8 +3,8 @@
 The sound is taken from the monitor of the default output, so it does not matter
 where it plays: laptop speakers, headphones, another Bluetooth device or the bulb.
 Needs ``numpy`` (``pip install chsmartbulb[audio]``). Capture uses the ``parec``
-tool where it exists (PulseAudio, PipeWire) and the ``soundcard`` package
-elsewhere (Windows loopback).
+tool where it exists (PulseAudio, PipeWire), WASAPI loopback through
+``PyAudioWPatch`` on Windows, and the ``soundcard`` package as a last resort.
 
 The analysis can also run on another machine: :class:`RemoteAudio` is fed over the
 network by ``chsmartbulb audio-agent``.
@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import math
 import shutil
+import sys
 import threading
 import time
 from collections import deque
@@ -33,7 +35,9 @@ if TYPE_CHECKING:
 RATE = 22050
 BLOCK = 512  # 23 ms per analysis step
 DEFAULT_DEVICE = "@DEFAULT_MONITOR@"
-BACKENDS = ("auto", "parec", "soundcard")
+BACKENDS = ("auto", "parec", "wasapi", "soundcard")
+
+log = logging.getLogger(__name__)
 
 _BANDS_HZ = ((40, 250), (250, 2000), (2000, 8000))
 _GAIN_HALF_LIFE = 4.0  # seconds for the automatic gain to forget a loud passage
@@ -42,6 +46,7 @@ _BEAT_RATIO = 1.5  # bass must exceed its recent average by this factor
 _BEAT_GAP = 0.15  # seconds; caps detection at 400 bpm
 _DARK = 1 / 255
 _MAX_DELAY = 2.0
+_STREAM_POLL = 0.5  # seconds between checks that a callback-driven stream is still alive
 
 
 @dataclass(frozen=True)
@@ -159,20 +164,28 @@ class MusicSource(_Published):
         if backend not in BACKENDS:
             raise ValueError(f"unknown audio backend {backend!r}; choose from: {', '.join(BACKENDS)}")
         self._np: Any = numpy
-        self._rate = rate
-        self._block = block
         self._device = device
         self._backend = backend
         self.on_block: Callable[[Levels, bool], None] | None = None
-        self._window = numpy.hanning(block)
+        self._configure(rate, block)
+        self._peaks = [0.0, 0.0, 0.0]
+        self._bass_average = 0.0
+        self._task: asyncio.Task[None] | None = None
+        self._last_onset = -math.inf
+
+    def _configure(self, rate: int, block: int | None = None) -> None:
+        """Size the analysis for ``rate``; without ``block``, pick one of about 23 ms."""
+        if block is None:
+            block = BLOCK
+            while rate / block > 60:  # keep the bins near 45 Hz wide so the bass band stays resolved
+                block *= 2
+        self._rate = rate
+        self._block = block
+        self._window = self._np.hanning(block)
         hz_per_bin = rate / block
         self._bins = [(max(1, round(lo / hz_per_bin)), round(hi / hz_per_bin)) for lo, hi in _BANDS_HZ]
         self._decay = 0.5 ** (block / rate / _GAIN_HALF_LIFE)
-        self._peaks = [0.0, 0.0, 0.0]
-        self._bass_average = 0.0
         self._pending = bytearray()
-        self._task: asyncio.Task[None] | None = None
-        self._last_onset = -math.inf
 
     def feed(self, pcm: bytes) -> None:
         """Consume signed 16-bit little-endian mono samples."""
@@ -224,13 +237,78 @@ class MusicSource(_Published):
     def _pick_backend(self) -> str:
         if self._backend != "auto":
             return self._backend
-        return "parec" if shutil.which("parec") else "soundcard"
+        if shutil.which("parec"):
+            return "parec"
+        return "wasapi" if sys.platform == "win32" else "soundcard"
 
     async def _capture(self) -> None:
-        if self._pick_backend() == "parec":
+        backend = self._pick_backend()
+        if backend == "parec":
             await self._capture_parec()
+        elif backend == "wasapi":
+            await self._capture_wasapi()
         else:
             await self._capture_soundcard()
+
+    async def _capture_wasapi(self) -> None:
+        """Windows loopback through PyAudioWPatch, at whatever format the output device runs."""
+        try:
+            import pyaudiowpatch as pyaudio
+        except ImportError:
+            raise SmartBulbError(
+                "sound capture on Windows needs PyAudioWPatch: pip install chsmartbulb[audio]"
+            ) from None
+        np = self._np
+        loop = asyncio.get_running_loop()
+        audio = pyaudio.PyAudio()
+        try:
+            device = self._wasapi_loopback(audio)
+            channels = int(device["maxInputChannels"])
+            rate = int(device["defaultSampleRate"])
+            self._configure(rate)
+
+            def on_audio(data: bytes, _frames: int, _time: Any, _status: int) -> tuple[None, int]:
+                samples = np.frombuffer(data, dtype="<i2")
+                if channels > 1:
+                    samples = samples.reshape(-1, channels).mean(axis=1).astype("<i2")
+                with contextlib.suppress(RuntimeError):  # the loop is gone while shutting down
+                    loop.call_soon_threadsafe(self.feed, samples.tobytes())
+                return None, pyaudio.paContinue
+
+            # Callback mode: a loopback stream delivers nothing while nothing plays, and a blocking read would hang.
+            stream = audio.open(
+                format=pyaudio.paInt16,
+                channels=channels,
+                rate=rate,
+                input=True,
+                input_device_index=int(device["index"]),
+                frames_per_buffer=self._block,
+                stream_callback=on_audio,
+            )
+            log.info("capturing %s (%d Hz, %d channels)", device["name"], rate, channels)
+            try:
+                while stream.is_active():  # noqa: ASYNC110 - PortAudio offers nothing to await
+                    await asyncio.sleep(_STREAM_POLL)
+                raise SmartBulbError("sound capture stopped unexpectedly")
+            finally:
+                stream.stop_stream()
+                stream.close()
+        except (OSError, LookupError, ValueError) as exc:
+            raise SmartBulbError(f"sound capture failed: {type(exc).__name__}: {exc}".rstrip(": ")) from exc
+        finally:
+            audio.terminate()
+
+    def _wasapi_loopback(self, audio: Any) -> Any:
+        """The loopback twin of the default output, or of the output whose name contains the chosen device."""
+        if self._device == DEFAULT_DEVICE:
+            return audio.get_default_wasapi_loopback()
+        wanted = self._device.lower()
+        names = []
+        for device in audio.get_loopback_device_info_generator():
+            names.append(str(device["name"]))
+            if wanted in names[-1].lower():
+                return device
+        raise LookupError(f"no output matches {self._device!r}; available: {', '.join(names) or 'none'}")
 
     async def _capture_soundcard(self) -> None:
         """Loopback capture through the ``soundcard`` package (WASAPI on Windows)."""
@@ -238,7 +316,7 @@ class MusicSource(_Published):
             import soundcard
         except ImportError:
             raise SmartBulbError(
-                "sound capture needs the 'parec' tool or the soundcard package (pip install soundcard)"
+                "the soundcard capture backend needs the soundcard package (pip install soundcard)"
             ) from None
         np = self._np
         loop = asyncio.get_running_loop()
