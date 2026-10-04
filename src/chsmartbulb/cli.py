@@ -1,18 +1,26 @@
-"""Command line front end: ``chsmartbulb --address AA:BB:CC:DD:EE:FF <command>``."""
+"""Command line front end: ``chsmartbulb --address AA:BB:CC:DD:EE:FF <command>``.
+
+Commands go to the background service when one is running, and straight to the
+bulb otherwise.
+"""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import functools
 import logging
 import os
 import sys
+from pathlib import Path
+from typing import Any
 
-from . import effects
+from . import catalog, effects, service
 from . import protocol as p
 from .bulb import ChSmartBulb
 from .color import NAMED, Color, parse_color
 from .errors import SmartBulbError
+from .music import DEFAULT_DEVICE, MusicSource
 from .protocol import NativeEffect
 
 ENV_ADDRESS = "CHSMARTBULB_ADDRESS"
@@ -33,77 +41,142 @@ def _percent(text: str) -> float:
     return value / 100
 
 
-def _host_effect(args: argparse.Namespace) -> effects.Effect:
-    color = args.color
-    if args.name == "breathe":
-        return effects.breathe(color, args.period)
-    if args.name == "hue":
-        return effects.hue_cycle(args.period)
-    if args.name == "pulse":
-        return effects.pulse(color, args.period)
-    if args.name == "strobe":
-        return effects.strobe(color, 1 / args.period)
-    # "police": a custom sequence, as an example of sequence()
-    return effects.sequence([(Color(r=255), args.period / 2), (Color(b=255), args.period / 2)])
+def _assignment(text: str) -> tuple[str, str]:
+    key, separator, value = text.partition("=")
+    if not separator or not key:
+        raise argparse.ArgumentTypeError("expected NAME=VALUE")
+    return key, value
+
+
+def _effect_params(args: argparse.Namespace) -> dict[str, Any]:
+    params: dict[str, Any] = dict(args.set or [])
+    if args.color is not None:
+        params["color"] = args.color.to_hex()
+    if args.period is not None:
+        params["period"] = args.period
+    catalog.resolve(args.name, params)
+    return params
+
+
+def _request(args: argparse.Namespace) -> dict[str, Any]:
+    """Translate parsed arguments into a service request."""
+    command = args.command
+    if command in ("on", "off"):
+        return {"cmd": command, "fade": args.fade}
+    if command == "color":
+        return {"cmd": "color", "color": args.value.to_hex(), "fade": args.fade, "brightness": args.brightness}
+    if command == "rgb":
+        color = Color(args.r, args.g, args.b, args.white)
+        return {"cmd": "color", "color": color.to_hex(), "fade": args.fade, "brightness": args.brightness}
+    if command == "white":
+        return {"cmd": "color", "color": Color(w=round(255 * args.level)).to_hex()}
+    if command == "brightness":
+        return {"cmd": "brightness", "level": args.level}
+    if command == "native":
+        color = None if args.color is None else args.color.to_hex()
+        return {"cmd": "native", "name": args.name, "color": color, "speed": args.speed, "brightness": args.brightness}
+    if command == "effect":
+        return {
+            "cmd": "effect",
+            "name": args.name,
+            "params": _effect_params(args),
+            "duration": args.duration,
+            "brightness": args.brightness,
+        }
+    if command == "timer":
+        return {"cmd": "timer", "index": args.index, "enabled": args.state == "on"}
+    if command == "raw":
+        return {"cmd": "raw", "hex": args.hex}
+    return {"cmd": command}  # status, stop, effects, info, timers
+
+
+def _print_timer(timer: dict[str, Any]) -> None:
+    days = ",".join(day for i, day in enumerate(_DAYS) if timer["days"] >> i & 1) or "-"
+    state = "enabled" if timer["enabled"] else "disabled"
+    print(f"#{timer['index']} {timer['name']!r} {timer['hour']:02d}:{timer['minute']:02d} days={days} {state}")
+
+
+def _print(command: str, reply: dict[str, Any]) -> None:
+    if command == "status":
+        print(f"bulb:       {'connected' if reply['connected'] else 'not connected'}")
+        print(f"light:      {'on' if reply['on'] else 'off'}")
+        print(f"colour:     {reply['color']}")
+        print(f"brightness: {round(reply['brightness'] * 100)}%")
+        if reply["effect"]:
+            running = "" if reply["playing"] else " (not running)"
+            print(f"effect:     {reply['effect']['name']} {reply['effect']['params'] or ''}{running}")
+        if reply["native"]:
+            print(f"native:     {reply['native']['name']} speed {reply['native']['speed']}")
+        if "bulb" in reply:
+            print(f"reported:   {reply['bulb']} (colour mix; the bulb does not report brightness)")
+    elif command == "info":
+        print(f"name:      {reply['name']}")
+        print(f"version:   {reply['version']}")
+        print(f"model:     {reply['model']} (protocol id 0x{reply['model_id']:04x})")
+        print(f"device id: 0x{reply['device_id']:04x}")
+    elif command == "timers":
+        if not reply["timers"]:
+            print("no timers stored")
+        for timer in reply["timers"]:
+            _print_timer(timer)
+    elif command == "timer":
+        timer = reply["timer"]
+        print(f"#{timer['index']} {timer['name']!r} is now {'enabled' if timer['enabled'] else 'disabled'}")
+    elif command == "effects":
+        for info in reply["effects"]:
+            params = ", ".join(f"{key}={value}" for key, value in info["params"].items())
+            audio = " [audio]" if info["needs_audio"] else ""
+            print(f"{info['name']:9s} {info['summary']}{audio}\n          {params}")
+    elif command == "raw" and "answer" in reply:
+        print(reply["answer"])
+
+
+def _bulb(args: argparse.Namespace, **options: Any) -> ChSmartBulb:
+    if not args.address:
+        raise SmartBulbError(f"no address given: use --address or set ${ENV_ADDRESS}")
+    if args.transport == "ble":
+        return ChSmartBulb.ble(args.address, **options)
+    return ChSmartBulb.rfcomm(args.address, args.channel, **options)
+
+
+def _music(args: argparse.Namespace) -> functools.partial[MusicSource]:
+    return functools.partial(MusicSource, device=args.audio_device)
+
+
+async def _daemon(args: argparse.Namespace) -> None:
+    bulb = _bulb(args, auto_reconnect=False)
+    state_path = None if args.no_state else service.default_state_path()
+    daemon = service.BulbService(bulb, state_path=state_path, fps=args.fps, music_factory=_music(args))
+    await daemon.serve(args.socket)
+
+
+async def _direct(args: argparse.Namespace, request: dict[str, Any]) -> dict[str, Any]:
+    fps = getattr(args, "fps", effects.DEFAULT_FPS)
+    direct = service.BulbService(_bulb(args), fps=fps, music_factory=_music(args))
+    await direct.attach()
+    try:
+        reply = await direct.handle(request)
+        if reply["ok"] and request["cmd"] == "effect":
+            await direct.wait_effect()  # no service to keep it going, so run it here
+        return reply
+    finally:
+        await direct.close()
 
 
 async def _run(args: argparse.Namespace) -> None:
-    bulb = ChSmartBulb.ble(args.address) if args.transport == "ble" else ChSmartBulb.rfcomm(args.address, args.channel)
-    async with bulb:
-        command = args.command
-        if command == "info":
-            info = await bulb.get_info()
-            print(f"name:      {info.name}")
-            print(f"version:   {info.version}")
-            print(f"model:     {info.model} (protocol id 0x{info.model_id:04x})")
-            print(f"device id: 0x{info.device_id:04x}")
-        elif command == "state":
-            state = await bulb.get_light_state()
-            print("on" if state.is_on else "off")
-            print(
-                f"colour mix (brightness is not reported): {state.color.to_hex()} "
-                f"r={state.color.r} g={state.color.g} b={state.color.b} w={state.color.w}"
-            )
-        elif command == "on":
-            await bulb.turn_on(fade=args.fade)
-        elif command == "off":
-            await bulb.turn_off(fade=args.fade)
-        elif command == "color":
-            await bulb.set_brightness(args.brightness)
-            await bulb.set_color(args.value, fade=args.fade)
-        elif command == "rgb":
-            await bulb.set_brightness(args.brightness)
-            await bulb.set_rgb(args.r, args.g, args.b, args.white, fade=args.fade)
-        elif command == "white":
-            await bulb.set_white(round(255 * args.level))
-        elif command == "brightness":
-            if not bulb.is_on:
-                raise SmartBulbError("the light is off; set a colour first")
-            await bulb.set_brightness(args.level)
-        elif command == "native":
-            await bulb.set_brightness(args.brightness)
-            await bulb.set_native_effect(NativeEffect[args.name.upper()], args.color, speed=args.speed)
-        elif command == "effect":
-            await bulb.set_brightness(args.brightness)
-            await effects.play(bulb, _host_effect(args), duration=args.duration, fps=args.fps)
-        elif command == "timers":
-            timers = await bulb.get_timers()
-            if not timers:
-                print("no timers stored")
-            for timer in timers:
-                days = ",".join(d for i, d in enumerate(_DAYS) if timer.days >> i & 1) or "-"
-                state = "enabled" if timer.enabled else "disabled"
-                print(f"#{timer.index} {timer.name!r} {timer.hour:02d}:{timer.minute:02d} days={days} {state}")
-        elif command == "timer":
-            timer = await bulb.set_timer_enabled(args.index, args.state == "on")
-            print(f"#{timer.index} {timer.name!r} is now {'enabled' if timer.enabled else 'disabled'}")
-        elif command == "raw":
-            data = bytes.fromhex(args.hex)
-            frame = p.Frame.decode(data)
-            if frame.type == p.FrameType.QUERY:
-                print((await bulb.request(frame)).encode().hex())
-            else:
-                await bulb.send(frame)
+    if args.command == "daemon":
+        await _daemon(args)
+        return
+    request = _request(args)
+    if request["cmd"] == "effects":
+        reply: dict[str, Any] = {"ok": True, "effects": catalog.describe()}
+    elif not args.direct and await service.is_running(args.socket):
+        reply = await service.call(args.socket, request)
+    else:
+        reply = await _direct(args, request)
+    if not reply["ok"]:
+        raise SmartBulbError(reply["error"])
+    _print(args.command, reply)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -116,14 +189,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("-t", "--transport", choices=("rfcomm", "ble"), default="rfcomm")
     parser.add_argument("--channel", type=int, default=p.RFCOMM_CHANNEL, help="RFCOMM channel (default 2)")
+    parser.add_argument("--socket", type=Path, default=service.default_socket_path(), help="service socket path")
+    parser.add_argument("--direct", action="store_true", help="talk to the bulb even if a service is running")
+    parser.add_argument(
+        "--audio-device",
+        default=DEFAULT_DEVICE,
+        metavar="SOURCE",
+        help="audio source for sound-reactive effects (default: monitor of the default output)",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
 
     def with_brightness(cmd: argparse.ArgumentParser) -> None:
-        cmd.add_argument("-b", "--brightness", type=_percent, default=1.0, metavar="PCT", help="0..100")
+        cmd.add_argument("-b", "--brightness", type=_percent, default=None, metavar="PCT", help="0..100")
 
+    cmd = sub.add_parser("daemon", help="run the background service in the foreground")
+    cmd.add_argument("--fps", type=float, default=effects.DEFAULT_FPS, help="effect frame rate")
+    cmd.add_argument("--no-state", action="store_true", help="do not remember the light state across restarts")
+
+    sub.add_parser("status", help="show the connection, the light state and the running effect")
     sub.add_parser("info", help="show name, version and model")
-    sub.add_parser("state", help="show whether the light is on and its colour mix")
     for name in ("on", "off"):
         cmd = sub.add_parser(name, help=f"turn the light {name}")
         cmd.add_argument("--fade", action="store_true", help="soft one-second transition")
@@ -143,25 +228,28 @@ def build_parser() -> argparse.ArgumentParser:
     cmd = sub.add_parser("white", help="white LEDs only")
     cmd.add_argument("level", type=_percent, nargs="?", default=1.0, metavar="PCT")
 
-    cmd = sub.add_parser("brightness", help="dim the current colour")
+    cmd = sub.add_parser("brightness", help="dim whatever is showing, effects included")
     cmd.add_argument("level", type=_percent, metavar="PCT")
 
     cmd = sub.add_parser("native", help="start an effect built into the bulb")
     cmd.add_argument("name", choices=[e.name.lower() for e in NativeEffect if e is not NativeEffect.FIXED])
-    cmd.add_argument("-c", "--color", type=_color, default=Color(r=255))
+    cmd.add_argument("-c", "--color", type=_color, default=None)
     cmd.add_argument(
         "-s", "--speed", type=int, default=8, choices=range(16), metavar="0..15", help="0 fastest, 15 slowest"
     )
     with_brightness(cmd)
 
-    cmd = sub.add_parser("effect", help="run an effect generated on this computer (Ctrl+C stops)")
-    cmd.add_argument("name", choices=("breathe", "hue", "pulse", "strobe", "police"))
-    cmd.add_argument("-c", "--color", type=_color, default=Color(r=255))
-    cmd.add_argument("-p", "--period", type=float, default=4.0, help="seconds per cycle")
+    cmd = sub.add_parser("effect", help="run an effect generated on this computer")
+    cmd.add_argument("name", choices=list(catalog.CATALOG))
+    cmd.add_argument("-c", "--color", type=_color, default=None)
+    cmd.add_argument("-p", "--period", type=float, default=None, help="seconds per cycle")
+    cmd.add_argument("-s", "--set", type=_assignment, action="append", metavar="NAME=VALUE", help="other parameters")
     cmd.add_argument("-d", "--duration", type=float, default=None, help="stop after this many seconds")
-    cmd.add_argument("--fps", type=float, default=effects.DEFAULT_FPS)
+    cmd.add_argument("--fps", type=float, default=effects.DEFAULT_FPS, help="frame rate when no service is running")
     with_brightness(cmd)
 
+    sub.add_parser("effects", help="list the available effects and their parameters")
+    sub.add_parser("stop", help="stop the running effect and return to the plain colour")
     sub.add_parser("timers", help="list schedule entries stored in the bulb")
     cmd = sub.add_parser("timer", help="enable or disable a stored schedule entry")
     cmd.add_argument("index", type=int)
@@ -172,15 +260,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    if not args.address:
-        parser.error(f"no address given: use --address or set ${ENV_ADDRESS}")
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.WARNING)
+    args = build_parser().parse_args(argv)
+    quiet = logging.INFO if args.command == "daemon" else logging.WARNING
+    logging.basicConfig(level=logging.DEBUG if args.verbose else quiet, format="%(levelname)s %(message)s")
     try:
         asyncio.run(_run(args))
     except KeyboardInterrupt:
         return 130
+    except asyncio.CancelledError:
+        return 0  # the service was asked to stop
     except (SmartBulbError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

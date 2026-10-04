@@ -111,8 +111,7 @@ def test_blocking_wrapper_runs_coroutines_synchronously():
     assert (transport.last_light["r"], transport.last_light["b"]) == (128, 50)
 
 
-def test_cli_requires_an_address(monkeypatch, capsys):
+def test_cli_requires_an_address_when_no_service_is_running(monkeypatch, capsys, tmp_path):
     monkeypatch.delenv("CHSMARTBULB_ADDRESS", raising=False)
-    with pytest.raises(SystemExit):
-        main(["on"])
+    assert main(["--socket", str(tmp_path / "none.sock"), "on"]) == 1
     assert "no address given" in capsys.readouterr().err
