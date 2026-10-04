@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import math
+from typing import ClassVar
 
 from chsmartbulb import protocol as p
 from chsmartbulb.color import Color
 from chsmartbulb.errors import ConnectionFailed, TransportError
 from chsmartbulb.light import Light
+from chsmartbulb.music import Levels
 from chsmartbulb.transport import Transport
 
 NAME_ANSWER = bytes.fromhex(
@@ -157,3 +160,30 @@ class RecordingLight(Light):
 
     async def turn_off(self, *, fade: bool = False) -> None:
         self.colors.append(Color())
+
+
+class FakeMusic:
+    """Stands in for :class:`chsmartbulb.music.MusicSource` without touching audio."""
+
+    created: ClassVar[list[FakeMusic]] = []
+
+    def __init__(self) -> None:
+        self.levels = Levels()
+        self.beats = 0
+        self.last_beat = -math.inf
+        self.now = 0.0
+        self.running = False
+        FakeMusic.created.append(self)
+
+    def clock(self) -> float:
+        return self.now
+
+    def beat(self, at: float) -> None:
+        self.beats += 1
+        self.last_beat = at
+
+    async def start(self) -> None:
+        self.running = True
+
+    async def stop(self) -> None:
+        self.running = False
