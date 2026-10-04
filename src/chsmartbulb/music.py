@@ -266,13 +266,19 @@ class MusicSource(_Published):
             channels = int(device["maxInputChannels"])
             rate = int(device["defaultSampleRate"])
             self._configure(rate)
+            heard = False
+
+            def deliver(pcm: bytes) -> None:
+                nonlocal heard
+                heard = True
+                self.feed(pcm)
 
             def on_audio(data: bytes, _frames: int, _time: Any, _status: int) -> tuple[None, int]:
                 samples = np.frombuffer(data, dtype="<i2")
                 if channels > 1:
                     samples = samples.reshape(-1, channels).mean(axis=1).astype("<i2")
                 with contextlib.suppress(RuntimeError):  # the loop is gone while shutting down
-                    loop.call_soon_threadsafe(self.feed, samples.tobytes())
+                    loop.call_soon_threadsafe(deliver, samples.tobytes())
                 return None, pyaudio.paContinue
 
             # Callback mode: a loopback stream delivers nothing while nothing plays, and a blocking read would hang.
@@ -287,8 +293,12 @@ class MusicSource(_Published):
             )
             log.info("capturing %s (%d Hz, %d channels)", device["name"], rate, channels)
             try:
-                while stream.is_active():  # noqa: ASYNC110 - PortAudio offers nothing to await
+                while stream.is_active():  # PortAudio offers nothing to await
                     await asyncio.sleep(_STREAM_POLL)
+                    if not heard:
+                        # Nothing has a stream open on the output, so no callback tells us it went quiet.
+                        self.feed(bytes(self._block * 2))
+                    heard = False
                 raise SmartBulbError("sound capture stopped unexpectedly")
             finally:
                 stream.stop_stream()
