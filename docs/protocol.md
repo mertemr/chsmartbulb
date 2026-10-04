@@ -119,6 +119,10 @@ fade to blue   01fe000053831000 00 ff 00 00 50 00 00 01
 - **[M] There is no brightness field; brightness is the channel value.** Red output in camera
   units: 255 → 75.6, 128 → 42.1, 64 → 20.9, 32 → 9.6, 16 → 5.2, 4 → 2.8, 1 → 1.5.
 - **[M]** RGB and white LEDs can be lit together.
+- **[M] Equal red, green and blue do not make white.** To the camera `ff ff ff` is a blue-violet
+  (18 % red, 10 % green, 72 % blue of the light it saw) because the green LEDs are much weaker
+  than the other two; the white LEDs read 29 / 28 / 42 with the same camera settings. A webcam is
+  not a colour meter, so the ratios are a comparison, not absolute values.
 - **[M]** The yellow byte lights nothing, alone or with white. It is stored and read back,
   so it probably drives warm-white LEDs on other models. This bulb has no colour temperature.
 - **[M] There is no power command.** Off is all channels at zero.

@@ -153,7 +153,7 @@ A screen agent sends `{"cmd": "screen", "color": "#rrggbb"}` whenever the colour
 | `spectrum` | Bass, mids and treble as red, green and blue | `release`, `delay` |
 | `volume` | One colour, as bright as the sound is loud | `color`, `release`, `floor`, `delay` |
 | `stereo` | Blend two colours by where the sound sits | `left`, `right`, `width`, `release`, `delay` |
-| `screen` | Follow the colour of the screen | `smoothing`, `saturation` |
+| `screen` | Follow the colour of the screen | `smoothing`, `saturation`, `white` |
 
 ```bash
 chsmartbulb effect breathe -c 00ff00 -p 3
@@ -213,10 +213,13 @@ chsmartbulb effect screen -s saturation=2 -s smoothing=0.4
 ```
 
 `smoothing` is how many seconds the light takes to follow a change and `saturation` multiplies the
-colourfulness (1 leaves it as on screen). The service follows its own screen unless a
-[screen agent](#the-screen-from-another-machine) is connected. Capture goes through mss, which
-works on Windows, macOS and X11 but not on Wayland, and has not been tried on a real picture yet:
-on the development machine it could only be run against an empty XWayland display.
+colourfulness (1 leaves it as on screen). The grey part of the colour goes to the white LEDs,
+because the bulb's red, green and blue together make a blue-violet instead of a white; `white=0`
+turns that off. Colours with a lot of green in them still lean towards blue: the green LEDs are
+the weakest.
+
+The service follows its own screen unless a [screen agent](#the-screen-from-another-machine) is
+connected. Capture goes through mss, which works on Windows, macOS and X11 but not on Wayland.
 
 ## Library
 

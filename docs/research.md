@@ -43,6 +43,8 @@ turned out wrong. Scripts are in [`research/`](../research), raw output in
 | 21 | Does the agent work from Windows? | Agent on a Windows desktop capturing its output through WASAPI loopback, light read back on the service | Light follows the music playing on the desktop | |
 | 22 | Do the stereo position and the beat sensitivity work on captured audio? | Panned test signal into a null sink, analysis and effect output printed | Position measured as played; sensitivity 0 dropped the soft accents, 1 kept them all | |
 | 23 | Does the screen capture run against the real mss library? | `ScreenCapture` on an XWayland display | Runs, 4.5 ms per 1080p frame; XWayland shows mss a black screen, so the colour itself is untested | |
+| 24 | Does the screen agent work from Windows? | Agent on a Windows desktop with a 2560x1440 monitor | Light follows the screen, judged by eye; greys looked off | |
+| 25 | Are the bulb's greys neutral? | RGB greys, the white LEDs and mixes of both, measured with the camera (`white_check.py`) | Equal RGB is blue-violet at every level; the white LEDs are close to neutral; moving the grey part of a colour to them removes most of the cast | `white_check.txt` |
 
 ## Wrong turns
 
