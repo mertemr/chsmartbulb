@@ -271,6 +271,29 @@ def test_wasapi_capture_finds_an_output_by_name_and_reports_a_bad_one(monkeypatc
     asyncio.run(scenario())
 
 
+def test_wasapi_capture_goes_silent_when_the_output_stops_delivering(monkeypatch):
+    FakePortAudio.instances.clear()
+    fake = types.SimpleNamespace(PyAudio=FakePortAudio, paInt16=8, paContinue=0)
+    monkeypatch.setitem(sys.modules, "pyaudiowpatch", fake)
+    monkeypatch.setattr(music, "_STREAM_POLL", 0.001)
+
+    async def scenario():
+        source = music.MusicSource(backend="wasapi")
+        seen = []
+        source.on_block = lambda levels, beat: seen.append(levels)
+        await source.start()
+        await asyncio.sleep(0)
+        t = np.arange(1024) / 48000
+        left = (0.5 * np.sin(2 * math.pi * 100 * t) * 32767).astype("<i2")
+        FakePortAudio.instances[-1].callback(np.stack([left, left], axis=1).tobytes(), 1024, None, 0)
+        await asyncio.sleep(0.02)  # the player closed its stream: WASAPI calls back no more
+        assert seen[0].bass > 0.9
+        assert source.levels == music.Levels()
+        await source.stop()
+
+    asyncio.run(scenario())
+
+
 def test_wasapi_capture_reports_a_stream_that_dies(monkeypatch):
     FakePortAudio.instances.clear()
     fake = types.SimpleNamespace(PyAudio=FakePortAudio, paInt16=8, paContinue=0)
