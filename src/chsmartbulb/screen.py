@@ -189,17 +189,23 @@ class ScreenCapture:
             stopping.set()
 
 
-def screen_follow(source: ScreenSource, smoothing: float = 0.2, saturation: float = 1.5) -> Effect:
+def screen_follow(
+    source: ScreenSource, smoothing: float = 0.2, saturation: float = 1.5, white: float = 1.0
+) -> Effect:
     """Show the colour of the screen.
 
     ``smoothing`` is how many seconds the light takes to follow a change, which
     keeps cuts and scrolling from flickering. ``saturation`` multiplies the
     colourfulness: 1 leaves the screen's colour as it is, more makes it purer.
+    ``white`` (0..1) is how much of the grey in the colour goes to the white
+    LEDs: the bulb's red, green and blue together make a blue-violet, not a white.
     """
     if smoothing < 0.0:
         raise ValueError("smoothing must not be negative")
     if saturation < 0.0:
         raise ValueError("saturation must not be negative")
+    if not 0.0 <= white <= 1.0:
+        raise ValueError("white must be within 0..1")
     shown = [0.0, 0.0, 0.0]
     last = 0.0
 
@@ -212,6 +218,6 @@ def screen_follow(source: ScreenSource, smoothing: float = 0.2, saturation: floa
         for i, channel in enumerate((target.r, target.g, target.b)):
             shown[i] += (channel - shown[i]) * blend
         hue, colourfulness, value = colorsys.rgb_to_hsv(*(channel / 255.0 for channel in shown))
-        return Color.from_hsv(hue * 360.0, min(1.0, colourfulness * saturation), value)
+        return Color.from_hsv(hue * 360.0, min(1.0, colourfulness * saturation), value).with_white(white)
 
     return effect

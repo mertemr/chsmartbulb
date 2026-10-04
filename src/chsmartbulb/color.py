@@ -56,6 +56,15 @@ class Color:
 
         return Color(scale(self.r), scale(self.g), scale(self.b), scale(self.w))
 
+    def with_white(self, share: float = 1.0) -> Color:
+        """Move the grey part of the red, green and blue mix to the white channel.
+
+        Equal red, green and blue rarely make a neutral white on an RGBW light;
+        its white LEDs do. ``share`` (0..1) is how much of the grey part moves.
+        """
+        grey = round(min(self.r, self.g, self.b) * max(0.0, min(1.0, share)))
+        return Color(self.r - grey, self.g - grey, self.b - grey, min(255, self.w + grey))
+
     def mix(self, other: Color, t: float) -> Color:
         """Linear blend towards ``other``; ``t`` = 0 gives self, 1 gives other."""
         t = max(0.0, min(1.0, t))

@@ -163,7 +163,7 @@ def test_screen_agent_colours_the_bulb_and_leaves_it_dark_when_it_goes():
 
     async def scenario():
         async with Hub(fps=200, screen_factory=no_capture) as hub:
-            request = {"cmd": "effect", "name": "screen", "params": {"smoothing": 0, "saturation": 1}}
+            request = {"cmd": "effect", "name": "screen", "params": {"smoothing": 0, "saturation": 1, "white": 0}}
             reply = await client.call(hub.remote, request)
             assert (reply["ok"], reply["error"]) == (False, "nothing to capture the screen with here")
 

@@ -92,7 +92,7 @@ def test_missing_capture_library_is_reported_clearly(monkeypatch):
 
 def test_screen_effect_follows_smoothly_and_boosts_the_colour():
     source = RemoteScreen()
-    follow = catalog.create("screen", {"smoothing": 0.5, "saturation": 1}, screen=source)
+    follow = catalog.create("screen", {"smoothing": 0.5, "saturation": 1, "white": 0}, screen=source)
     assert follow(0.0) == Color()
     source.push(Color(r=200, g=100))
     part = follow(0.1)
@@ -102,9 +102,23 @@ def test_screen_effect_follows_smoothly_and_boosts_the_colour():
     assert follow(20.0) == Color()
 
     source.push(Color(r=200, g=100, b=100))
-    vivid = catalog.create("screen", {"smoothing": 0, "saturation": 2}, screen=source)
+    vivid = catalog.create("screen", {"smoothing": 0, "saturation": 2, "white": 0}, screen=source)
     assert vivid(0.0) == Color(r=200)  # twice as colourful: the grey part is gone
     with pytest.raises(ValueError, match="no screen source"):
         catalog.create("screen")
     with pytest.raises(ValueError, match="smoothing"):
         catalog.create("screen", {"smoothing": -1}, screen=source)
+
+
+def test_screen_effect_sends_grey_to_the_white_leds():
+    source = RemoteScreen()
+    source.push(Color(r=200, g=100, b=100))
+    plain = catalog.create("screen", {"smoothing": 0, "saturation": 1}, screen=source)
+    assert plain(0.0) == Color(r=100, w=100)  # the grey part of the pink
+    source.push(Color(128, 128, 128))
+    assert plain(1.0) == Color(w=128)
+    half = catalog.create("screen", {"smoothing": 0, "saturation": 1, "white": 0.5}, screen=source)
+    assert half(0.0) == Color(64, 64, 64, 64)
+    assert Color(r=255, g=40).with_white() == Color(r=255, g=40)  # nothing grey in it
+    with pytest.raises(ValueError, match="white"):
+        catalog.create("screen", {"white": 2}, screen=source)
