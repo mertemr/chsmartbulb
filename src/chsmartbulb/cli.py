@@ -16,7 +16,7 @@ from .errors import SmartBulbError
 from .protocol import NativeEffect
 
 ENV_ADDRESS = "CHSMARTBULB_ADDRESS"
-_DAYS = "Mon Tue Wed Thu Fri Sat Sun".split()
+_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
 def _color(text: str) -> Color:
@@ -48,10 +48,7 @@ def _host_effect(args: argparse.Namespace) -> effects.Effect:
 
 
 async def _run(args: argparse.Namespace) -> None:
-    if args.transport == "ble":
-        bulb = ChSmartBulb.ble(args.address)
-    else:
-        bulb = ChSmartBulb.rfcomm(args.address, args.channel)
+    bulb = ChSmartBulb.ble(args.address) if args.transport == "ble" else ChSmartBulb.rfcomm(args.address, args.channel)
     async with bulb:
         command = args.command
         if command == "info":
@@ -63,8 +60,10 @@ async def _run(args: argparse.Namespace) -> None:
         elif command == "state":
             state = await bulb.get_light_state()
             print("on" if state.is_on else "off")
-            print(f"colour mix (brightness is not reported): {state.color.to_hex()} "
-                  f"r={state.color.r} g={state.color.g} b={state.color.b} w={state.color.w}")
+            print(
+                f"colour mix (brightness is not reported): {state.color.to_hex()} "
+                f"r={state.color.r} g={state.color.g} b={state.color.b} w={state.color.w}"
+            )
         elif command == "on":
             await bulb.turn_on(fade=args.fade)
         elif command == "off":
@@ -109,8 +108,12 @@ async def _run(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="chsmartbulb", description="Control a CHSmartBulb / BL08A bulb.")
-    parser.add_argument("-a", "--address", default=os.environ.get(ENV_ADDRESS),
-                        help=f"Bluetooth address of the bulb (or set ${ENV_ADDRESS})")
+    parser.add_argument(
+        "-a",
+        "--address",
+        default=os.environ.get(ENV_ADDRESS),
+        help=f"Bluetooth address of the bulb (or set ${ENV_ADDRESS})",
+    )
     parser.add_argument("-t", "--transport", choices=("rfcomm", "ble"), default="rfcomm")
     parser.add_argument("--channel", type=int, default=p.RFCOMM_CHANNEL, help="RFCOMM channel (default 2)")
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -146,8 +149,9 @@ def build_parser() -> argparse.ArgumentParser:
     cmd = sub.add_parser("native", help="start an effect built into the bulb")
     cmd.add_argument("name", choices=[e.name.lower() for e in NativeEffect if e is not NativeEffect.FIXED])
     cmd.add_argument("-c", "--color", type=_color, default=Color(r=255))
-    cmd.add_argument("-s", "--speed", type=int, default=8, choices=range(16), metavar="0..15",
-                     help="0 fastest, 15 slowest")
+    cmd.add_argument(
+        "-s", "--speed", type=int, default=8, choices=range(16), metavar="0..15", help="0 fastest, 15 slowest"
+    )
     with_brightness(cmd)
 
     cmd = sub.add_parser("effect", help="run an effect generated on this computer (Ctrl+C stops)")

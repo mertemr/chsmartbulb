@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 
 def _clamp(value: float) -> int:
-    return max(0, min(255, int(round(value))))
+    return max(0, min(255, round(value)))
 
 
 @dataclass(frozen=True)
@@ -70,14 +70,16 @@ class Color:
         return f"#{self.r:02x}{self.g:02x}{self.b:02x}" + (f"{self.w:02x}" if self.w else "")
 
 
-OFF = Color()
-RED = Color(r=255)
-GREEN = Color(g=255)
-BLUE = Color(b=255)
-YELLOW = Color(r=255, g=255)
-CYAN = Color(g=255, b=255)
+# fmt: off
+OFF     = Color()
+RED     = Color(r=255)
+GREEN   = Color(g=255)
+BLUE    = Color(b=255)
+YELLOW  = Color(r=255, g=255)
+CYAN    = Color(g=255, b=255)
 MAGENTA = Color(r=255, b=255)
-WHITE = Color(w=255)
+WHITE   = Color(w=255)
+# fmt: on
 
 NAMED = {
     "off": OFF,

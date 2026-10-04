@@ -4,10 +4,10 @@ import datetime as dt
 
 import pytest
 
-from fakes import HARDWARE_ANSWER, NAME_ANSWER, TIMERS_ANSWER
 from chsmartbulb import protocol as p
 from chsmartbulb.color import Color
 from chsmartbulb.errors import ProtocolError
+from fakes import HARDWARE_ANSWER, NAME_ANSWER, TIMERS_ANSWER
 
 
 def test_query_frames_match_the_vendor_app():

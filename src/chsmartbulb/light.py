@@ -7,8 +7,12 @@ bulbs (BLE, Wi-Fi, ...) can be added later by implementing this one class.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 from .color import Color
+
+if TYPE_CHECKING:
+    from typing_extensions import Self
 
 
 class Light(ABC):
@@ -51,7 +55,7 @@ class Light(ABC):
     async def set_rgb(self, r: int, g: int, b: int, w: int = 0, *, fade: bool = False) -> None:
         await self.set_color(Color(r, g, b, w), fade=fade)
 
-    async def __aenter__(self) -> Light:
+    async def __aenter__(self) -> Self:
         await self.connect()
         return self
 

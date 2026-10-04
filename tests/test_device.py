@@ -4,9 +4,9 @@ import asyncio
 
 import pytest
 
-from fakes import FakeBulbTransport
 from chsmartbulb import ChSmartBulb, Color, NativeEffect
 from chsmartbulb.errors import ConnectionFailed, NotConnected, ProtocolError, RequestTimeout
+from fakes import FakeBulbTransport
 
 
 def run(coroutine):
@@ -87,7 +87,9 @@ def test_queries_parse_answers_even_when_split_into_chunks():
         transport = FakeBulbTransport(chunk=20)  # BLE delivers answers in pieces
         async with ChSmartBulb(transport) as bulb:
             info = await bulb.get_info()
-            assert (info.name, info.version, info.model, info.model_id) == ("SmartBulb Bluetooth", "1.0.", "BL04", 0x0C47)
+            assert (info.name, info.version, info.model, info.model_id) == (
+                "SmartBulb Bluetooth", "1.0.", "BL04", 0x0C47,
+            )  # fmt: skip
             timers = await bulb.get_timers()
             assert [t.name for t in timers] == ["power off", "power on"]
             assert len(await bulb.get_status_raw()) == 24
@@ -100,13 +102,15 @@ def test_timer_can_be_disabled_and_the_change_is_verified_by_reading_back():
         transport = FakeBulbTransport()
         async with ChSmartBulb(transport) as bulb:
             timer = await bulb.set_timer_enabled(6, False)
-            assert (timer.name, timer.enabled, timer.hour, timer.minute, timer.days) == ("power off", False, 6, 20, 0x7F)
+            assert (timer.name, timer.enabled, timer.hour, timer.minute, timer.days) == (
+                "power off", False, 6, 20, 0x7F,
+            )  # fmt: skip
             # same layout as the vendor app's frame: index, flag, name[32], 12-byte tail
             assert transport.timer_writes[-1].hex() == (
                 "01fe000053303c00" "06000000" "00000000"
                 + b"power off".ljust(32, b"\0").hex()
                 + "0600007f0614000301000000"
-            )
+            )  # fmt: skip
             with pytest.raises(ValueError):
                 await bulb.set_timer_enabled(9, True)
             transport.ignore_timer_writes = True

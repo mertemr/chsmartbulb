@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 import inspect
 import threading
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from typing_extensions import Self
 
 
 class BlockingLight:
@@ -40,7 +43,7 @@ class BlockingLight:
 
         return call
 
-    def __enter__(self) -> BlockingLight:
+    def __enter__(self) -> Self:
         self.connect()
         return self
 

@@ -8,11 +8,11 @@ import datetime as dt
 import logging
 from dataclasses import dataclass
 
+from . import protocol as p
 from .color import WHITE, Color
 from .errors import NotConnected, ProtocolError, RequestTimeout, TransportError
 from .light import Light
 from .transport import BleTransport, RfcommTransport, Transport
-from . import protocol as p
 
 log = logging.getLogger(__name__)
 

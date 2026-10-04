@@ -1,12 +1,13 @@
 """Colour helpers, effect functions and the effect player."""
 
 import asyncio
+import itertools
 
 import pytest
 
-from fakes import FakeBulbTransport, RecordingLight
 from chsmartbulb import BlockingLight, ChSmartBulb, Color, effects, parse_color
 from chsmartbulb.cli import main
+from fakes import FakeBulbTransport, RecordingLight
 
 
 def test_color_parsing_and_validation():
@@ -70,7 +71,7 @@ def test_play_sends_only_changed_frames_for_the_duration():
     assert colors[0] == Color(r=255)
     # 10 Hz for 0.35 s is 3.5 cycles = 7 on/off phases; sampled at 100 fps, duplicates are skipped
     assert 6 <= len(colors) <= 8
-    assert all(a != b for a, b in zip(colors, colors[1:]))
+    assert all(a != b for a, b in itertools.pairwise(colors))
 
 
 def test_player_replaces_and_stops_effects():

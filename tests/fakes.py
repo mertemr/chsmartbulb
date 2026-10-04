@@ -19,9 +19,7 @@ TIMERS_ANSWER = bytes.fromhex(
     "706f776572206f666600010000000000120000001300000014000000150000000601017f0614000301000000"
     "706f776572206f6e0000010000000000120000001300000014000000150000000501007f0a23000301000000"
 )
-STATUS_ANSWER = bytes.fromhex(
-    "01fe0000410028000000000000000000001f00160000000500000200000000000004881102100000"
-)
+STATUS_ANSWER = bytes.fromhex("01fe0000410028000000000000000000001f00160000000500000200000000000004881102100000")
 
 
 class FakeBulbTransport(Transport):
@@ -101,9 +99,7 @@ class FakeBulbTransport(Transport):
                 record = bytearray(frame.body[8:])
                 record[33] = 1
                 index = record[32]
-                offset = next(
-                    o for o in range(16, len(self.timers_answer), 44) if self.timers_answer[o + 32] == index
-                )
+                offset = next(o for o in range(16, len(self.timers_answer), 44) if self.timers_answer[o + 32] == index)
                 self.timers_answer[offset + 32 : offset + 44] = record[32:]
         elif frame.type == p.FrameType.QUERY:
             if frame.command == p.Command.IDENTIFY:

@@ -76,11 +76,12 @@ class BleTransport(Transport):
                 pass
 
     async def write(self, data: bytes) -> None:
-        if not self.is_open:
+        client = self._client
+        if client is None or not client.is_connected:
             raise TransportError("BLE link is closed")
         try:
             # The bulb ignores write-without-response, so always ask for one.
-            await self._client.write_gatt_char(self._write_uuid, data, response=True)
+            await client.write_gatt_char(self._write_uuid, data, response=True)
         except Exception as exc:
             raise TransportError(f"BLE write failed: {exc}") from exc
 

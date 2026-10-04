@@ -10,12 +10,15 @@ See ``docs/protocol.md`` for how each field was verified.
 
 from __future__ import annotations
 
-import datetime as dt
 from dataclasses import dataclass
 from enum import IntEnum
+from typing import TYPE_CHECKING
 
 from .color import Color
 from .errors import ProtocolError
+
+if TYPE_CHECKING:
+    import datetime as dt
 
 MAGIC = b"\x01\xfe\x00\x00"
 HEADER_LEN = 8
@@ -35,13 +38,13 @@ _ARGS_ZERO = bytes(8)
 _ARGS_ALL = bytes.fromhex("ffffffff00000080")
 
 
-class FrameType(IntEnum):
+class FrameType(IntEnum):# fmt: skip
     ANSWER = 0x41  # 'A', device -> host
     QUERY  = 0x51  # 'Q', host -> device, answered with the same command byte
     SET    = 0x53  # 'S', host -> device, not acknowledged
 
 
-class Command(IntEnum):
+class Command(IntEnum): # fmt: skip
     STATUS      = 0x00  # as QUERY; as SET the same byte sets the clock
     IDENTIFY    = 0x02
     TIMERS      = 0x30
@@ -54,33 +57,35 @@ class Command(IntEnum):
 
 
 _QUERY_ARGS = {
-    Command.STATUS: _ARGS_QUERY,
-    Command.IDENTIFY: _ARGS_QUERY,
-    Command.TIMERS: _ARGS_QUERY,
-    Command.RINGTONES: _ARGS_QUERY,
-    Command.ALARMS: _ARGS_ALL,
-    Command.NAME: _ARGS_ZERO,
-    Command.HARDWARE: _ARGS_ZERO,
+    Command.STATUS:      _ARGS_QUERY,
+    Command.IDENTIFY:    _ARGS_QUERY,
+    Command.TIMERS:      _ARGS_QUERY,
+    Command.RINGTONES:   _ARGS_QUERY,
+    Command.ALARMS:      _ARGS_ALL,
+    Command.NAME:        _ARGS_ZERO,
+    Command.HARDWARE:    _ARGS_ZERO,
     Command.LIGHT_STATE: _ARGS_ZERO,
-}
+}  # fmt: skip
 
 
 class NativeEffect(IntEnum):
     """Effect byte of the light command. Unknown values make the bulb ignore the frame."""
 
-    FIXED = 0x50
-    MUSIC = 0x51  # sound reactive; dark while silent, ignores the colour
+    # fmt: off
+    FIXED     = 0x50
+    MUSIC     = 0x51  # sound reactive; dark while silent, ignores the colour
     BREATHING = 0x52
-    RAINBOW = 0x53
-    FLASH = 0x54
+    RAINBOW   = 0x53
+    FLASH     = 0x54
     HEARTBEAT = 0x56
     AUTOMATIC = 0x58
-    CANDLE = 0x5A
-    OCEAN = 0x5C
-    NATURAL = 0x5D
-    SUNSET = 0x5E
-    PASSION = 0x5F
-    RGB_CUT = 0x61
+    CANDLE    = 0x5A
+    OCEAN     = 0x5C
+    NATURAL   = 0x5D
+    SUNSET    = 0x5E
+    PASSION   = 0x5F
+    RGB_CUT   = 0x61
+    # fmt: on
 
     @property
     def uses_color(self) -> bool:

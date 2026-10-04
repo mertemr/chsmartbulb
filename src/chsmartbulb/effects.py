@@ -13,9 +13,12 @@ import contextlib
 import math
 import time
 from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING
 
 from .color import OFF, Color
-from .light import Light
+
+if TYPE_CHECKING:
+    from .light import Light
 
 Effect = Callable[[float], Color]
 

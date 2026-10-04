@@ -46,9 +46,7 @@ class RfcommTransport(Transport):
             sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
             sock.setblocking(False)
             try:
-                await asyncio.wait_for(
-                    loop.sock_connect(sock, (self.address, self.channel)), self._connect_timeout
-                )
+                await asyncio.wait_for(loop.sock_connect(sock, (self.address, self.channel)), self._connect_timeout)
             except asyncio.TimeoutError:
                 sock.close()
                 raise ConnectionFailed(f"timed out connecting to {target}") from None
