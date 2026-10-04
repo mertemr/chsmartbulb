@@ -10,6 +10,8 @@ from chsmartbulb.cli import main
 from chsmartbulb.errors import SmartBulbError
 from fakes import FakeBulbTransport, FakeMusic
 
+unix_sockets = pytest.mark.skipif(not hasattr(asyncio, "start_unix_server"), reason="needs Unix sockets")
+
 
 def run(coroutine):
     return asyncio.run(coroutine)
@@ -226,6 +228,7 @@ def test_supervisor_reconnects_and_resumes_the_effect():
     run(scenario())
 
 
+@unix_sockets
 def test_unusable_socket_path_is_a_clear_error(tmp_path):
     async def scenario():
         daemon = service.BulbService(ChSmartBulb(FakeBulbTransport(), auto_reconnect=False))
@@ -235,6 +238,7 @@ def test_unusable_socket_path_is_a_clear_error(tmp_path):
     run(scenario())
 
 
+@unix_sockets
 def test_requests_travel_over_the_socket_and_the_cli_uses_it(tmp_path, capsys):
     socket_path = tmp_path / "bulb.sock"
 

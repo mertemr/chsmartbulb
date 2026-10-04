@@ -169,12 +169,12 @@ def test_cli_talks_to_a_remote_service(capsys):
 
 
 def test_platforms_without_unix_sockets_or_getuid_still_work(monkeypatch, tmp_path):
-    monkeypatch.delattr(os, "getuid")
+    monkeypatch.delattr(os, "getuid", raising=False)
     monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
     monkeypatch.setenv("USERNAME", "mert")
     assert service.default_socket_path().parent.name == "chsmartbulb-mert"
 
-    monkeypatch.delattr(asyncio, "open_unix_connection")
+    monkeypatch.delattr(asyncio, "open_unix_connection", raising=False)
 
     async def scenario():
         assert not await client.is_running(tmp_path / "bulb.sock")
