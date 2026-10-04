@@ -116,7 +116,8 @@ def test_agent_sends_nothing_while_nothing_plays():
     async def scenario():
         async with Hub() as hub:
             sent = []
-            blocks = [(Levels(), False)] * 5 + [(Levels(bass=0.5), False)] + [(Levels(), False)] * 5
+            faint = (Levels(mid=0.0004), False)  # rounds to nothing on the wire
+            blocks = [(Levels(), False)] * 5 + [(Levels(bass=0.5), False)] + [faint] * 5
             source = ScriptedSource(blocks, interval=0.001)
 
             real_write = asyncio.StreamWriter.write
