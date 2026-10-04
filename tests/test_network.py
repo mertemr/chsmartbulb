@@ -6,24 +6,17 @@ import os
 
 import pytest
 
-from chsmartbulb import ChSmartBulb, client, service
+from chsmartbulb import ChSmartBulb, Color, client, service
 from chsmartbulb.cli import main
 from chsmartbulb.errors import ConnectionFailed, SmartBulbError
 from chsmartbulb.music import Levels, RemoteAudio
-from fakes import FakeBulbTransport, FakeMusic, ScriptedSource
+from fakes import FakeBulbTransport, FakeMusic, ScriptedScreen, ScriptedSource, until
 
 TOKEN = "s3cret"
 
 
 def run(coroutine):
     return asyncio.run(coroutine)
-
-
-async def until(condition, *, limit=1.0):
-    deadline = asyncio.get_running_loop().time() + limit
-    while not condition():
-        assert asyncio.get_running_loop().time() < deadline, "condition was never met"
-        await asyncio.sleep(0.005)
 
 
 class Hub:
@@ -147,7 +140,7 @@ def test_agent_sends_nothing_while_nothing_plays():
 def test_audio_blocks_carry_onset_and_balance_and_older_agents_still_count():
     now = [0.0]
     daemon = service.BulbService(ChSmartBulb(FakeBulbTransport()), music_factory=FakeMusic)
-    remote = daemon._remote = RemoteAudio(clock=lambda: now[0])
+    remote = daemon._feeds["audio"].remote = RemoteAudio(clock=lambda: now[0])
 
     def push(**block):
         now[0] += 1.0
@@ -162,6 +155,33 @@ def test_audio_blocks_carry_onset_and_balance_and_older_agents_still_count():
     assert push(levels=[1, 0, 0], balance=9)[0].balance == 1.0
     assert push(levels="junk") == (Levels(1.0, balance=1.0), 3)
     assert push(levels=[0, 0, 0], onset="loud") == (Levels(1.0, balance=1.0), 3)
+
+
+def test_screen_agent_colours_the_bulb_and_leaves_it_dark_when_it_goes():
+    def no_capture():
+        raise SmartBulbError("nothing to capture the screen with here")
+
+    async def scenario():
+        async with Hub(fps=200, screen_factory=no_capture) as hub:
+            request = {"cmd": "effect", "name": "screen", "params": {"smoothing": 0, "saturation": 1}}
+            reply = await client.call(hub.remote, request)
+            assert (reply["ok"], reply["error"]) == (False, "nothing to capture the screen with here")
+
+            shown = ScriptedScreen([Color(r=200, g=100)])
+            agent = asyncio.create_task(client.run_screen_agent(hub.remote, source_factory=lambda: shown))
+            feed = hub.daemon._feeds["screen"]
+            await until(lambda: feed.agents == 1)
+            assert (await hub.status())["screen"] == "agent"
+            assert (await client.call(hub.remote, request))["ok"]
+            await until(lambda: hub.transport.channels[:3] == [100, 0, 200])  # green, blue, red
+
+            agent.cancel()
+            await asyncio.gather(agent, return_exceptions=True)
+            await until(lambda: feed.agents == 0 and not any(hub.transport.channels))
+            status = await hub.status()
+            assert (status["screen"], status["playing"]) == ("local", True)  # waiting for an agent to return
+
+    run(scenario())
 
 
 def test_remote_parses_host_and_port():

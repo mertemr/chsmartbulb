@@ -26,6 +26,8 @@ audio = [
     # WASAPI loopback capture; Linux uses the parec tool instead
     "PyAudioWPatch>=0.2.12; sys_platform == 'win32'",
 ]
+# the screen effect; mss captures on Windows, macOS and X11
+screen = ["numpy>=1.24", "mss>=9"]
 
 [project.scripts]
 chsmartbulb = "chsmartbulb.cli:main"
@@ -89,7 +91,7 @@ python-platform = "linux"
 exclude = ["research"]
 
 [tool.ty.analysis]
-allowed-unresolved-imports = ["bleak", "bleak.**", "pyaudiowpatch", "soundcard"]
+allowed-unresolved-imports = ["bleak", "bleak.**", "mss", "pyaudiowpatch", "soundcard"]
 
 [tool.uv]
 # uv's downloadable Python builds are compiled without Bluetooth sockets.

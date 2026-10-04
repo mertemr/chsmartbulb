@@ -227,3 +227,42 @@ class ScriptedSource:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+
+
+class ScriptedScreen:
+    """Stands in for a :class:`chsmartbulb.screen.ScreenCapture`: reports the given colours, then idles."""
+
+    def __init__(self, colors: list[Color], interval: float = 0.005) -> None:
+        self.colors = colors
+        self.interval = interval
+        self.on_color: Callable[[Color], None] | None = None
+        self._task: asyncio.Task[None] | None = None
+
+    async def start(self) -> None:
+        self._task = asyncio.create_task(self._emit())
+
+    async def _emit(self) -> None:
+        for color in self.colors:
+            if self.on_color is not None:
+                self.on_color(color)
+            await asyncio.sleep(self.interval)
+        await asyncio.Event().wait()
+
+    async def wait(self) -> None:
+        if self._task is not None:
+            await self._task
+
+    async def stop(self) -> None:
+        task, self._task = self._task, None
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+
+async def until(condition: Callable[[], bool], *, limit: float = 1.0) -> None:
+    """Wait for ``condition`` to hold, failing the test when it never does."""
+    deadline = asyncio.get_running_loop().time() + limit
+    while not condition():
+        assert asyncio.get_running_loop().time() < deadline, "condition was never met"
+        await asyncio.sleep(0.005)

@@ -29,6 +29,7 @@ from .color import WHITE, Color, parse_color
 from .errors import ConnectionFailed, NotConnected, SmartBulbError, TransportError
 from .music import AudioSource, Levels, MusicSource, RemoteAudio
 from .protocol import NativeEffect
+from .screen import RemoteScreen, ScreenCapture, ScreenSource
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
@@ -39,6 +40,19 @@ log = logging.getLogger(__name__)
 
 _LINK_ERRORS = (ConnectionFailed, NotConnected, TransportError)
 _MAX_RETRY_DELAY = 60.0
+
+
+@dataclass
+class _Feed:
+    """What an effect follows: an agent's stream while one is connected, this machine otherwise."""
+
+    remote: Any
+    local: Callable[[], Any]
+    agents: int = 0
+    active: Any = None  # the source the running effect reads
+
+    def source(self) -> Any:
+        return self.remote if self.agents else self.local()
 
 
 def default_socket_path() -> Path:
@@ -94,19 +108,20 @@ class BulbService:
         retry_delay: float = 5.0,
         poll_interval: float = 2.0,
         music_factory: Callable[[], AudioSource] = MusicSource,
+        screen_factory: Callable[[], ScreenSource] = ScreenCapture,
     ) -> None:
         self._bulb = bulb
         self._state_path = state_path
         self._fps = fps
         self._retry_delay = retry_delay
         self._poll_interval = poll_interval
-        self._music_factory = music_factory
+        self._feeds = {
+            "audio": _Feed(RemoteAudio(), music_factory),
+            "screen": _Feed(RemoteScreen(), screen_factory),
+        }
         self._plan = Plan()
         self._adopt_on_connect = True  # no remembered state yet: take over what the bulb shows
         self._effect_task: asyncio.Task[None] | None = None
-        self._music: AudioSource | None = None
-        self._remote = RemoteAudio()
-        self._agents = 0
         self._lock = asyncio.Lock()  # one request changes the plan at a time
         self._supervisor: asyncio.Task[None] | None = None
         self.tcp_address: tuple[str, int] | None = None
@@ -234,12 +249,26 @@ class BulbService:
     # --- effects ----------------------------------------------------------------------
 
     async def _start_effect(self, spec: Mapping[str, Any], duration: float | None) -> None:
-        info = catalog.CATALOG[spec["name"]]
-        if info.needs_audio:
-            self._music = self._audio_source()
-            await self._music.start()
-        effect = catalog.create(spec["name"], spec.get("params"), audio=self._music)
+        needs = catalog.CATALOG[spec["name"]].needs
+        sources = {}
+        if needs is not None:
+            feed = self._feeds[needs]
+            try:
+                feed.active = feed.source()
+            except SmartBulbError as exc:
+                # e.g. nothing to capture with on this machine: stay dark until an agent brings a feed
+                log.warning("%s effect has no input: %s", spec["name"], exc)
+                feed.active = feed.remote
+            await feed.active.start()
+            sources[needs] = feed.active
+        effect = catalog.create(spec["name"], spec.get("params"), **sources)
         self._effect_task = asyncio.create_task(self._run_effect(effect, duration))
+
+    async def _release_sources(self) -> None:
+        for feed in self._feeds.values():
+            source, feed.active = feed.active, None
+            if source is not None:
+                await source.stop()
 
     async def _run_effect(self, effect: effects.Effect, duration: float | None) -> None:
         try:
@@ -250,9 +279,7 @@ class BulbService:
         # ran its full duration: go back to the plain colour
         self._plan.effect = None
         self._save()
-        music, self._music = self._music, None
-        if music is not None:
-            await music.stop()
+        await self._release_sources()
         try:
             await self._bulb.set_color(self._plan.color)
         except _LINK_ERRORS as exc:
@@ -261,31 +288,38 @@ class BulbService:
     def _check_effect(self, name: str, params: Mapping[str, Any]) -> None:
         """Build the effect once, so a bad request fails before it reaches the plan."""
         catalog.resolve(name, params)
-        audio = self._audio_source() if catalog.CATALOG[name].needs_audio else None
-        catalog.create(name, params, audio=audio)
+        needs = catalog.CATALOG[name].needs
+        sources = {needs: self._feeds[needs].source()} if needs is not None else {}
+        catalog.create(name, params, **sources)
 
-    def _audio_source(self) -> AudioSource:
-        """An agent's feed when one is connected, local capture otherwise."""
-        return self._remote if self._agents else self._music_factory()
-
-    async def _audio_changed(self) -> None:
+    async def _feed_changed(self, kind: str) -> None:
         effect = self._plan.effect
-        if self._playing and effect is not None and catalog.CATALOG[effect["name"]].needs_audio:
+        if self._playing and effect is not None and catalog.CATALOG[effect["name"]].needs == kind:
             await self._apply()  # restart the effect on the other source
 
-    async def _agent_joined(self) -> None:
+    async def _agent_joined(self, kind: str) -> None:
         async with self._lock:
-            self._agents += 1
-            log.info("audio agent connected")
-            await self._audio_changed()
+            self._feeds[kind].agents += 1
+            log.info("%s agent connected", kind)
+            await self._feed_changed(kind)
 
-    async def _agent_left(self) -> None:
+    async def _agent_left(self, kind: str) -> None:
         async with self._lock:
-            self._agents -= 1
-            log.info("audio agent disconnected")
-            if not self._agents:
-                self._remote.clear()
-                await self._audio_changed()
+            feed = self._feeds[kind]
+            feed.agents -= 1
+            log.info("%s agent disconnected", kind)
+            if not feed.agents:
+                feed.remote.clear()
+                await self._feed_changed(kind)
+
+    def _push(self, kind: str, request: Mapping[str, Any]) -> None:
+        if kind == "audio":
+            self._push_audio(request)
+            return
+        try:
+            self._feeds[kind].remote.push(parse_color(str(request["color"])))
+        except (KeyError, ValueError):
+            return
 
     def _push_audio(self, request: Mapping[str, Any]) -> None:
         try:
@@ -295,7 +329,7 @@ class BulbService:
             onset = float(request["onset"]) if "onset" in request else math.inf if request.get("beat") else 0.0
         except (KeyError, TypeError, ValueError):
             return  # a malformed block is not worth a reply at forty a second
-        self._remote.push(Levels(bass, mid, treble, balance), onset)
+        self._feeds["audio"].remote.push(Levels(bass, mid, treble, balance), onset)
 
     async def _stop_effect(self) -> None:
         task, self._effect_task = self._effect_task, None
@@ -303,9 +337,7 @@ class BulbService:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-        music, self._music = self._music, None
-        if music is not None:
-            await music.stop()
+        await self._release_sources()
 
     @property
     def _playing(self) -> bool:
@@ -341,7 +373,7 @@ class BulbService:
         reply: dict[str, Any] = {
             "connected": self._bulb.is_connected,
             "playing": self._playing,
-            "audio": "agent" if self._agents else "local",
+            **{kind: "agent" if feed.agents else "local" for kind, feed in self._feeds.items()},
             **self._plan.to_json(),
         }
         if self._bulb.is_connected:
@@ -520,7 +552,7 @@ class BulbService:
     ) -> None:
         """Serve one connection. ``token`` is what a network client must present first."""
         trusted = token is None
-        is_agent = False
+        feeding: set[str] = set()  # what this connection supplies as an agent
         try:
             while line := await reader.readline():
                 try:
@@ -537,12 +569,12 @@ class BulbService:
                         reply = {"ok": True} if trusted else {"ok": False, "error": "wrong token"}
                     elif not trusted:
                         reply = {"ok": False, "error": "not authorised"}
-                    elif command == "audio":
-                        if not is_agent:
-                            is_agent = True
-                            await self._agent_joined()
-                        self._push_audio(request)
-                        continue  # audio blocks are not acknowledged
+                    elif command in self._feeds:
+                        if command not in feeding:
+                            feeding.add(command)
+                            await self._agent_joined(command)
+                        self._push(command, request)
+                        continue  # an agent's stream is not acknowledged
                     else:
                         reply = await self.handle(request)
                 writer.write(json.dumps(reply).encode() + b"\n")
@@ -553,8 +585,8 @@ class BulbService:
             pass
         finally:
             writer.close()
-            if is_agent:
-                await self._agent_left()
+            for kind in feeding:
+                await self._agent_left(kind)
 
 
 def _prepare_socket_dir(socket_path: Path) -> None:

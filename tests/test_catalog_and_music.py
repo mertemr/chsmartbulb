@@ -63,7 +63,8 @@ def test_describe_is_plain_data_covering_every_effect():
     assert {entry["name"] for entry in listing} == set(catalog.CATALOG)
     breathe = next(entry for entry in listing if entry["name"] == "breathe")
     assert breathe["params"] == {"color": "#ff0000", "period": 4.0, "floor": 0.0}
-    assert [entry["name"] for entry in listing if entry["needs_audio"]] == ["music", "spectrum", "volume", "stereo"]
+    needs = {entry["name"]: entry["needs"] for entry in listing if entry["needs"]}
+    assert needs == {"music": "audio", "spectrum": "audio", "volume": "audio", "stereo": "audio", "screen": "screen"}
 
 
 def test_candle_flickers_within_its_depth_and_palette_blends():

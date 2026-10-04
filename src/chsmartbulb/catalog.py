@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from . import effects, music
+from . import effects, music, screen
 from .color import BLUE, GREEN, RED, Color, parse_color
 
 if TYPE_CHECKING:
@@ -20,7 +20,7 @@ class EffectInfo:
     summary: str
     build: Callable[..., Effect]
     defaults: Mapping[str, Any]
-    needs_audio: bool = False
+    needs: str | None = None  # the input the effect follows: "audio" or "screen"
 
 
 def _police(period: float) -> Effect:
@@ -45,28 +45,35 @@ _ENTRIES = [
         "flash on the beat of the computer's audio",
         music.music_pulse,
         {"color": None, "decay": 5.0, "delay": 0.0, "sensitivity": music.DEFAULT_SENSITIVITY},
-        needs_audio=True,
+        needs="audio",
     ),
     EffectInfo(
         "spectrum",
         "bass, mids, treble as red, green, blue",
         music.music_spectrum,
         {"release": 3.0, "delay": 0.0},
-        needs_audio=True,
+        needs="audio",
     ),
     EffectInfo(
         "volume",
         "one colour, as bright as the audio is loud",
         music.music_volume,
         {"color": RED, "release": 3.0, "floor": 0.0, "delay": 0.0},
-        needs_audio=True,
+        needs="audio",
     ),
     EffectInfo(
         "stereo",
         "blend two colours by where the sound sits between left and right",
         music.music_stereo,
         {"left": BLUE, "right": RED, "width": 4.0, "release": 3.0, "delay": 0.0},
-        needs_audio=True,
+        needs="audio",
+    ),
+    EffectInfo(
+        "screen",
+        "follow the colour of the screen",
+        screen.screen_follow,
+        {"smoothing": 0.2, "saturation": 1.5},
+        needs="screen",
     ),
 ]
 
@@ -107,15 +114,22 @@ def resolve(name: str, params: Mapping[str, Any] | None = None) -> dict[str, Any
     return resolved
 
 
-def create(name: str, params: Mapping[str, Any] | None = None, *, audio: music.AudioSource | None = None) -> Effect:
-    """Build the named effect. Sound-reactive ones need a running ``audio`` source."""
+def create(
+    name: str,
+    params: Mapping[str, Any] | None = None,
+    *,
+    audio: music.AudioSource | None = None,
+    screen: screen.ScreenSource | None = None,
+) -> Effect:
+    """Build the named effect. Those that follow sound or the screen need that source, running."""
     resolved = resolve(name, params)
     info = CATALOG[name]
-    if not info.needs_audio:
+    if info.needs is None:
         return info.build(**resolved)
-    if audio is None:
-        raise ValueError(f"effect {name!r} needs an audio source")
-    return info.build(audio, **resolved)
+    source = audio if info.needs == "audio" else screen
+    if source is None:
+        raise ValueError(f"effect {name!r} was given no {info.needs} source to follow")
+    return info.build(source, **resolved)
 
 
 def _plain(value: Any) -> Any:
@@ -133,7 +147,7 @@ def describe() -> list[dict[str, Any]]:
             "name": info.name,
             "summary": info.summary,
             "params": {key: _plain(value) for key, value in info.defaults.items()},
-            "needs_audio": info.needs_audio,
+            "needs": info.needs,
         }
         for info in CATALOG.values()
     ]

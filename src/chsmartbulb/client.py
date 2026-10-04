@@ -1,4 +1,4 @@
-"""Talking to a running service: one-off requests and the audio agent."""
+"""Talking to a running service: one-off requests and the agents that feed it."""
 
 from __future__ import annotations
 
@@ -8,13 +8,18 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from .errors import ConnectionFailed, SmartBulbError
 from .music import Capture, Levels, MusicSource
+from .screen import ScreenCapture, ScreenFeed
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
+
+    from .color import Color
+
+    _Send = Callable[[Mapping[str, Any]], None]
 
 log = logging.getLogger(__name__)
 
@@ -116,9 +121,51 @@ async def run_agent(
     Runs until cancelled. Only band levels and beats travel, never the audio itself.
     A lost connection or a failed capture is retried after ``retry_delay`` seconds.
     """
+
+    def attach(source: Capture, send: _Send) -> None:
+        source.on_block = _audio_forwarder(send)
+
+    await _keep_streaming(target, source_factory, attach, "audio analysis", retry_delay)
+
+
+async def run_screen_agent(
+    target: Target,
+    *,
+    source_factory: Callable[[], ScreenFeed] = ScreenCapture,
+    retry_delay: float = 3.0,
+) -> None:
+    """Watch this machine's screen and stream its colour to a service.
+
+    Runs until cancelled. Only one colour at a time travels, never the picture.
+    """
+
+    def attach(source: ScreenFeed, send: _Send) -> None:
+        def forward(color: Color) -> None:
+            send({"cmd": "screen", "color": color.to_hex()})
+
+        source.on_color = forward
+
+    await _keep_streaming(target, source_factory, attach, "the screen colour", retry_delay)
+
+
+class _Source(Protocol):
+    async def start(self) -> None: ...
+
+    async def wait(self) -> None: ...
+
+    async def stop(self) -> None: ...
+
+
+async def _keep_streaming(
+    target: Target,
+    source_factory: Callable[[], Any],
+    attach: Callable[[Any, _Send], None],
+    what: str,
+    retry_delay: float,
+) -> None:
     while True:
         try:
-            await _stream(target, source_factory())
+            await _stream(target, source_factory(), attach, what)
         except SmartBulbError as exc:
             log.warning("%s; retrying in %g s", exc, retry_delay)
             log.debug("details", exc_info=exc)
@@ -127,8 +174,7 @@ async def run_agent(
         await asyncio.sleep(retry_delay)
 
 
-async def _stream(target: Target, source: Capture) -> None:
-    reader, writer = await connect(target)
+def _audio_forwarder(send: _Send) -> Callable[[Levels, float], None]:
     silent = False
 
     def forward(levels: Levels, onset: float) -> None:
@@ -143,11 +189,20 @@ async def _stream(target: Target, source: Capture) -> None:
             message["onset"] = round(onset, 2)
         if balance := round(levels.balance, 2):
             message["balance"] = balance
+        send(message)
+
+    return forward
+
+
+async def _stream(target: Target, source: _Source, attach: Callable[[Any, _Send], None], what: str) -> None:
+    reader, writer = await connect(target)
+
+    def send(message: Mapping[str, Any]) -> None:
         writer.write(json.dumps(message).encode() + b"\n")
 
-    source.on_block = forward
+    attach(source, send)
     await source.start()
-    log.info("streaming audio analysis to %s", target)
+    log.info("streaming %s to %s", what, target)
     closed = asyncio.ensure_future(reader.read())  # the service sends nothing back; this ends when it hangs up
     capture = asyncio.ensure_future(source.wait())
     try:

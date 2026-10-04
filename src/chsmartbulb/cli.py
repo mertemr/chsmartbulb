@@ -22,10 +22,12 @@ from .color import NAMED, Color, parse_color
 from .errors import SmartBulbError
 from .music import BACKENDS, DEFAULT_DEVICE, MusicSource
 from .protocol import NativeEffect
+from .screen import PRIMARY, ScreenCapture
 
 ENV_ADDRESS = "CHSMARTBULB_ADDRESS"
 ENV_TOKEN = "CHSMARTBULB_TOKEN"
 _DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+_AGENTS = ("audio-agent", "screen-agent")
 
 
 def _color(text: str) -> Color:
@@ -101,6 +103,8 @@ def _print(command: str, reply: dict[str, Any]) -> None:
     if command == "status":
         print(f"bulb:       {'connected' if reply['connected'] else 'not connected'}")
         print(f"audio:      {reply['audio']}")
+        if "screen" in reply:
+            print(f"screen:     {reply['screen']}")
         print(f"light:      {'on' if reply['on'] else 'off'}")
         print(f"colour:     {reply['color']}")
         print(f"brightness: {round(reply['brightness'] * 100)}%")
@@ -127,8 +131,8 @@ def _print(command: str, reply: dict[str, Any]) -> None:
     elif command == "effects":
         for info in reply["effects"]:
             params = ", ".join(f"{key}={value}" for key, value in info["params"].items())
-            audio = " [audio]" if info["needs_audio"] else ""
-            print(f"{info['name']:9s} {info['summary']}{audio}\n          {params}")
+            needs = f" [{info['needs']}]" if info["needs"] else ""
+            print(f"{info['name']:9s} {info['summary']}{needs}\n          {params}")
     elif command == "raw" and "answer" in reply:
         print(reply["answer"])
 
@@ -143,6 +147,10 @@ def _bulb(args: argparse.Namespace, **options: Any) -> ChSmartBulb:
 
 def _music(args: argparse.Namespace) -> functools.partial[MusicSource]:
     return functools.partial(MusicSource, device=args.audio_device, backend=args.audio_backend)
+
+
+def _screen(args: argparse.Namespace) -> functools.partial[ScreenCapture]:
+    return functools.partial(ScreenCapture, monitor=args.monitor)
 
 
 def _listen(text: str) -> tuple[str, int]:
@@ -163,19 +171,25 @@ async def _daemon(args: argparse.Namespace) -> None:
         raise SmartBulbError(f"--listen needs a token: use --token or set ${ENV_TOKEN}")
     bulb = _bulb(args, auto_reconnect=False)
     state_path = None if args.no_state else service.default_state_path()
-    daemon = service.BulbService(bulb, state_path=state_path, fps=args.fps, music_factory=_music(args))
+    daemon = service.BulbService(
+        bulb, state_path=state_path, fps=args.fps, music_factory=_music(args), screen_factory=_screen(args)
+    )
     await daemon.serve(args.socket, listen=args.listen, token=args.token)
 
 
 async def _agent(args: argparse.Namespace) -> None:
     target = _remote(args) if args.host else args.socket
-    _music(args)()  # fail now if capture cannot work on this machine
+    if args.command == "screen-agent":
+        _screen(args)()  # fail now if capture cannot work on this machine
+        await client.run_screen_agent(target, source_factory=_screen(args))
+        return
+    _music(args)()
     await client.run_agent(target, source_factory=_music(args))
 
 
 async def _direct(args: argparse.Namespace, request: dict[str, Any]) -> dict[str, Any]:
     fps = getattr(args, "fps", effects.DEFAULT_FPS)
-    direct = service.BulbService(_bulb(args), fps=fps, music_factory=_music(args))
+    direct = service.BulbService(_bulb(args), fps=fps, music_factory=_music(args), screen_factory=_screen(args))
     await direct.attach()
     try:
         reply = await direct.handle(request)
@@ -190,7 +204,7 @@ async def _run(args: argparse.Namespace) -> None:
     if args.command == "daemon":
         await _daemon(args)
         return
-    if args.command == "audio-agent":
+    if args.command in _AGENTS:
         await _agent(args)
         return
     request = _request(args)
@@ -230,6 +244,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="audio source for sound-reactive effects (default: monitor of the default output)",
     )
     parser.add_argument("--audio-backend", choices=BACKENDS, default="auto", help="how the audio is captured")
+    parser.add_argument(
+        "--monitor", type=int, default=PRIMARY, metavar="N", help="which monitor the screen effect follows; 0 is all"
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -247,6 +264,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     sub.add_parser("audio-agent", help="analyse this machine's audio and feed it to a service (see --host)")
+    sub.add_parser("screen-agent", help="watch this machine's screen and feed its colour to a service (see --host)")
 
     sub.add_parser("status", help="show the connection, the light state and the running effect")
     sub.add_parser("info", help="show name, version and model")
@@ -302,7 +320,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    quiet = logging.INFO if args.command in ("daemon", "audio-agent") else logging.WARNING
+    quiet = logging.INFO if args.command in ("daemon", *_AGENTS) else logging.WARNING
     logging.basicConfig(level=logging.DEBUG if args.verbose else quiet, format="%(levelname)s %(message)s")
     try:
         asyncio.run(_run(args))
