@@ -10,7 +10,10 @@ a command line tool for it.
 
 - RGB colour, the separate white LEDs, brightness, on/off, soft fades
 - The 13 effects built into the bulb, including its sound-reactive mode
-- Your own effects, generated on the computer and streamed to the bulb
+- Your own effects, generated on the computer and streamed to the bulb, including ones that
+  follow whatever audio the computer is playing
+- A background service that keeps the connection, runs effects and restores the light when the
+  bulb comes back after losing power
 - Reading the name, model, colour and stored timers; enabling and disabling timers
 - Bluetooth Classic (RFCOMM) and BLE transports
 
@@ -27,7 +30,8 @@ uv sync
 ```
 
 Python builds downloaded by `uv` are compiled without Bluetooth sockets, so the project is set up
-to use the system interpreter. Add `--extra ble` for the BLE transport.
+to use the system interpreter. Add `--extra audio` for the sound-reactive effects and `--extra ble`
+for the BLE transport.
 
 ## Quick start
 
@@ -37,6 +41,9 @@ uv run chsmartbulb color red
 uv run chsmartbulb rgb 0 80 255 --brightness 40 --fade
 uv run chsmartbulb effect hue --period 10
 ```
+
+With `chsmartbulb daemon` running, the same commands go through the background service: they
+return at once, effects keep playing, and the light state is remembered.
 
 ```python
 import asyncio
