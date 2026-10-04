@@ -123,6 +123,8 @@ fade to blue   01fe000053831000 00 ff 00 00 50 00 00 01
   (18 % red, 10 % green, 72 % blue of the light it saw) because the green LEDs are much weaker
   than the other two; the white LEDs read 29 / 28 / 42 with the same camera settings. A webcam is
   not a colour meter, so the ratios are a comparison, not absolute values.
+- **[M]** Next to a green value, red at 48 % and blue at about 23 % of it give the camera the
+  same colour as the white LEDs, from `ff` down to `40`.
 - **[M]** The yellow byte lights nothing, alone or with white. It is stored and read back,
   so it probably drives warm-white LEDs on other models. This bulb has no colour temperature.
 - **[M] There is no power command.** Off is all channels at zero.

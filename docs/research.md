@@ -45,6 +45,7 @@ turned out wrong. Scripts are in [`research/`](../research), raw output in
 | 23 | Does the screen capture run against the real mss library? | `ScreenCapture` on an XWayland display | Runs, 4.5 ms per 1080p frame; XWayland shows mss a black screen, so the colour itself is untested | |
 | 24 | Does the screen agent work from Windows? | Agent on a Windows desktop with a 2560x1440 monitor | Light follows the screen, judged by eye; greys looked off | |
 | 25 | Are the bulb's greys neutral? | RGB greys, the white LEDs and mixes of both, measured with the camera (`white_check.py`) | Equal RGB is blue-violet at every level; the white LEDs are close to neutral; moving the grey part of a colour to them removes most of the cast | `white_check.txt` |
+| 26 | Which mix of red, green and blue matches the white LEDs? | Closed loop with the camera: adjust red and blue next to full green until the picture matches the white LEDs at equal camera green (`balance.py`) | Red 0.48 and blue 0.23 of green, holding within a few percent down to a quarter of full level; a prediction from the single channels was far off, so the channels do not simply add up | `balance.txt` |
 
 ## Wrong turns
 

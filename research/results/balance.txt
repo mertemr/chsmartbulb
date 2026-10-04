@@ -1,0 +1,62 @@
+state before: {'on': True, 'color': '#000000ff', 'brightness': 1.0, 'effect': {'name': 'music', 'params': {}}, 'native': None}
+exposure 50: saturated fraction 0.007
+exposure 80: saturated fraction 0.007
+exposure 120: saturated fraction 0.008
+exposure 166: saturated fraction 0.008
+exposure 250: saturated fraction 0.009
+chosen exposure: 250
+region: 2141 of 14400 pixels
+dark: [2. 0. 3.]
+white  16: camera [13.2 11.2 16.5]
+white  24: camera [20.  18.5 25.2]
+white  32: camera [27.6 26.  35.1]
+white  48: camera [41.3 39.9 50.4]
+white  64: camera [52.9 52.5 63.7]
+white  96: camera [73.2 72.7 86. ]
+white 128: camera [ 90.1  90.  104.7]
+white 160: camera [103.9 104.4 121.2]
+white 192: camera [115.5 116.9 135.4]
+white 224: camera [126.  128.2 148. ]
+white 255: camera [135.3 138.2 158.5]
+try 0: r= 40 g=255 b= 23 camera [ 24.8 101.9  81.4] white at that green [101.5 101.9 118.3] red x0.24 blue x0.69
+try 1: r= 81 g=255 b= 28 camera [70.6 96.4 87.8] white at that green [ 96.2  96.4 112. ] red x0.73 blue x0.78
+try 2: r= 94 g=255 b= 31 camera [81.1 95.3 90.7] white at that green [ 95.2  95.3 110.8] red x0.85 blue x0.82
+try 3: r=102 g=255 b= 35 camera [85.9 96.1 94.7] white at that green [ 95.9  96.1 111.7] red x0.90 blue x0.85
+try 4: r=108 g=255 b= 38 camera [89.3 96.5 96.6] white at that green [ 96.3  96.5 112.1] red x0.93 blue x0.86
+try 5: r=112 g=255 b= 41 camera [91.5 96.2 98.7] white at that green [ 96.   96.2 111.8] red x0.95 blue x0.88
+try 6: r=115 g=255 b= 43 camera [93.  96.4 99.8] white at that green [ 96.2  96.4 112. ] red x0.97 blue x0.89
+try 7: r=117 g=255 b= 46 camera [ 93.9  97.1 103.6] white at that green [ 96.9  97.1 112.8] red x0.97 blue x0.92
+try 8: r=119 g=255 b= 48 camera [ 94.8  97.5 105.4] white at that green [ 97.3  97.5 113.3] red x0.97 blue x0.93
+try 9: r=120 g=255 b= 49 camera [ 95.1  97.7 105.9] white at that green [ 97.5  97.7 113.5] red x0.98 blue x0.93
+try 10: r=122 g=255 b= 51 camera [ 95.9  97.7 107.5] white at that green [ 97.5  97.7 113.5] red x0.98 blue x0.95
+try 11: r=123 g=255 b= 53 camera [ 96.4  97.6 109. ] white at that green [ 97.4  97.6 113.4] red x0.99 blue x0.96
+try 12: r=124 g=255 b= 54 camera [ 96.9  97.7 109.5] white at that green [ 97.5  97.7 113.5] red x0.99 blue x0.96
+try 13: r=124 g=255 b= 55 camera [ 96.8  97.8 109.8] white at that green [ 97.6  97.8 113.6] red x0.99 blue x0.97
+try 14: r=124 g=255 b= 56 camera [ 96.9  98.  110.2] white at that green [ 97.8  98.  113.9] red x0.99 blue x0.97
+try 15: r=125 g=255 b= 56 camera [ 97.2  97.9 110.3] white at that green [ 97.7  97.9 113.8] red x1.00 blue x0.97
+gains next to green: red 0.490, blue 0.224
+the same gains at lower levels, and the plain mix for comparison:
+  balanced (125, 255, 57)   camera [ 97.2  98.1 110.9]  red x0.99 blue x0.97 of white
+  plain    (255, 255, 255)  camera [139.8 120.1 237.5]  red x1.18 blue x1.71 of white
+  balanced (94, 192, 43)    camera [78.9 80.2 91.7]     red x0.98 blue x0.97 of white
+  plain    (192, 192, 192)  camera [120.7 100.9 211.1]  red x1.20 blue x1.80 of white
+  balanced (63, 128, 29)    camera [58.5 59.1 68.8]     red x0.98 blue x0.97 of white
+  plain    (128, 128, 128)  camera [ 96.1  75.9 174.9]  red x1.26 blue x1.96 of white
+  balanced (31, 64, 14)     camera [31.3 30.  36. ]     red x0.99 blue x0.91 of white
+  plain    (64, 64, 64)     camera [ 59.2  43.8 115.5]  red x1.32 blue x2.12 of white
+what the library's screen.balanced() makes of grey:
+  (122, 255, 59) camera [ 96.7  98.8 112.4]  red x0.98 blue x0.98 of white
+  (61, 128, 29) camera [57.8 59.4 68.7]     red x0.97 blue x0.96 of white
+  (31, 64, 15) camera [31.7 30.6 39.2]     red x0.99 blue x0.98 of white
+mixed colours, plain and balanced (strongest channel kept):
+  ffff00 plain    (255, 255, 0)    camera [171.   78.2  20.5]  share 0.63/0.29/0.08
+  ffff00 balanced (125, 255, 0)    camera [102.5  88.8  30.7]  share 0.46/0.40/0.14
+  ff8000 plain    (255, 128, 0)    camera [181.5  30.7  -0.7]  share 0.86/0.15/-0.00
+  ff8000 balanced (249, 255, 0)    camera [166.7  78.6  20.9]  share 0.63/0.30/0.08
+  00ffff plain    (0, 255, 255)    camera [ -1.8 140.7 246.3]  share -0.00/0.37/0.64
+  00ffff balanced (0, 255, 57)     camera [ -1.9 111.3 127.6]  share -0.01/0.47/0.54
+  80ff00 plain    (128, 255, 0)    camera [103.9  88.3  30.2]  share 0.47/0.40/0.14
+  80ff00 balanced (63, 255, 0)     camera [55.3 91.6 39.2]     share 0.30/0.49/0.21
+  ff00ff plain    (255, 0, 255)    camera [160.5  47.9 238.6]  share 0.36/0.11/0.53
+  ff00ff balanced (255, 0, 116)    camera [177.9   2.1 161.2]  share 0.52/0.01/0.47
+state after: {'on': True, 'color': '#000000ff', 'brightness': 1.0, 'effect': {'name': 'music', 'params': {}}, 'native': None}
