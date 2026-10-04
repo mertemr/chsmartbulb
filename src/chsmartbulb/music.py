@@ -201,8 +201,10 @@ class MusicSource(_Published):
         values = [float(spectrum[lo:hi].mean()) for lo, hi in self._bins]
         levels = []
         for i, value in enumerate(values):
-            self._peaks[i] = max(value, self._peaks[i] * self._decay)
-            levels.append(value / self._peaks[i] if self._peaks[i] > _SILENCE else 0.0)
+            heard = value > _SILENCE
+            # the gain holds through a pause, or the first faint sound after it would read as full level
+            self._peaks[i] = max(value, self._peaks[i] * self._decay) if heard else self._peaks[i]
+            levels.append(value / self._peaks[i] if heard else 0.0)
 
         bass = values[0]
         now = self.clock()

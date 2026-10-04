@@ -97,6 +97,15 @@ def test_levels_adapt_to_quiet_playback():
     assert source.levels.bass > 0.9  # relative to the recent peak, not to full scale
 
 
+def test_gain_holds_through_a_pause():
+    clock = Clock()
+    source = music.MusicSource(clock=clock)
+    feed(source, clock, tone(100, 1.0))
+    feed(source, clock, silence(60.0))
+    feed(source, clock, tone(100, 0.2, amplitude=0.005))
+    assert 0 < source.levels.bass < 0.05  # still measured against the music before the pause
+
+
 def test_beats_are_counted_once_per_kick():
     clock = Clock()
     source = music.MusicSource(clock=clock)
