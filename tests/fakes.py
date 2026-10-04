@@ -1,0 +1,163 @@
+"""In-memory stand-ins for hardware, modelled on behaviour observed on the real bulb."""
+
+from __future__ import annotations
+
+import asyncio
+
+from chsmartbulb import protocol as p
+from chsmartbulb.color import Color
+from chsmartbulb.errors import ConnectionFailed, TransportError
+from chsmartbulb.light import Light
+from chsmartbulb.transport import Transport
+
+NAME_ANSWER = bytes.fromhex(
+    "01fe0000418050000000000000000000312e302e00000003536d61727442756c6220426c7565746f6f7468"
+) + bytes(37)
+HARDWARE_ANSWER = bytes.fromhex("01fe0000418116007c58000034304c42010100001a00")
+TIMERS_ANSWER = bytes.fromhex(
+    "01fe0000413068000200000000000000"
+    "706f776572206f666600010000000000120000001300000014000000150000000601017f0614000301000000"
+    "706f776572206f6e0000010000000000120000001300000014000000150000000501007f0a23000301000000"
+)
+STATUS_ANSWER = bytes.fromhex(
+    "01fe0000410028000000000000000000001f00160000000500000200000000000004881102100000"
+)
+
+
+class FakeBulbTransport(Transport):
+    """Answers queries like the real bulb and records every light command."""
+
+    def __init__(self, *, chunk: int | None = None) -> None:
+        self.chunk = chunk  # split answers into pieces of this size, like BLE notifications
+        self.opened = 0
+        self.fail_open = False
+        self.fail_next_write = False
+        self.light_bodies: list[bytes] = []
+        self.channels = [0, 0, 0, 0, 0]  # g, b, r, w, y as last written
+        self.timers_answer = bytearray(TIMERS_ANSWER)
+        self.timer_writes: list[bytes] = []
+        self.ignore_timer_writes = False
+        self._open = False
+        self._incoming: asyncio.Queue[bytes | None] = asyncio.Queue()
+        self._reader = p.FrameReader()
+
+    @property
+    def is_open(self) -> bool:
+        return self._open
+
+    async def open(self) -> None:
+        if self.fail_open:
+            raise ConnectionFailed("fake: host is down")
+        self._open = True
+        self.opened += 1
+        self._incoming = asyncio.Queue()
+        self._reader = p.FrameReader()
+
+    async def close(self) -> None:
+        if self._open:
+            self._open = False
+            self._incoming.put_nowait(None)
+
+    def drop_link(self) -> None:
+        """Simulate the bulb going out of range."""
+        self._open = False
+        self._incoming.put_nowait(None)
+
+    async def write(self, data: bytes) -> None:
+        if not self._open:
+            raise TransportError("fake: closed")
+        if self.fail_next_write:
+            self.fail_next_write = False
+            self._open = False
+            self._incoming.put_nowait(None)
+            raise TransportError("fake: broken pipe")
+        for frame in self._reader.feed(data):
+            self._handle(frame)
+
+    async def read(self) -> bytes:
+        data = await self._incoming.get()
+        if data is None:
+            raise TransportError("fake: closed")
+        return data
+
+    def _answer(self, data: bytes) -> None:
+        size = self.chunk or len(data)
+        for i in range(0, len(data), size):
+            self._incoming.put_nowait(data[i : i + size])
+
+    def _handle(self, frame: p.Frame) -> None:
+        if frame.type == p.FrameType.SET and frame.command == p.Command.LIGHT:
+            g, b, r, _speed, effect, w, y, _fade = frame.body
+            try:
+                p.NativeEffect(effect)
+            except ValueError:
+                return  # the real bulb ignores frames with an unknown effect byte
+            self.light_bodies.append(frame.body)
+            self.channels = [g, b, r, w, y]
+        elif frame.type == p.FrameType.SET and frame.command == p.Command.TIMERS:
+            self.timer_writes.append(frame.encode())
+            if not self.ignore_timer_writes:
+                # stored record = name[32] + tail, where the bulb reports tail[1] as 01
+                record = bytearray(frame.body[8:])
+                record[33] = 1
+                index = record[32]
+                offset = next(
+                    o for o in range(16, len(self.timers_answer), 44) if self.timers_answer[o + 32] == index
+                )
+                self.timers_answer[offset + 32 : offset + 44] = record[32:]
+        elif frame.type == p.FrameType.QUERY:
+            if frame.command == p.Command.IDENTIFY:
+                self._answer(p.Frame(p.FrameType.ANSWER, frame.command, bytes.fromhex("470c000000000000")).encode())
+            elif frame.command == p.Command.LIGHT_STATE:
+                # the real bulb rescales so that the largest channel reads 255
+                top = max(self.channels)
+                g, b, r, w, y = (c * 255 // top if top else 0 for c in self.channels)
+                self._answer(p.Frame(p.FrameType.ANSWER, frame.command, bytes((g, b, r, 0, 0, w, y, 0))).encode())
+            elif frame.command == p.Command.NAME:
+                self._answer(NAME_ANSWER)
+            elif frame.command == p.Command.HARDWARE:
+                self._answer(HARDWARE_ANSWER)
+            elif frame.command == p.Command.TIMERS:
+                self._answer(bytes(self.timers_answer))
+            elif frame.command == p.Command.STATUS:
+                self._answer(STATUS_ANSWER)
+
+    @property
+    def last_light(self) -> dict[str, int]:
+        g, b, r, speed, effect, w, y, fade = self.light_bodies[-1]
+        return dict(r=r, g=g, b=b, w=w, y=y, speed=speed, effect=effect, fade=fade)
+
+
+class RecordingLight(Light):
+    """A light that only remembers what it was told, with timestamps."""
+
+    def __init__(self) -> None:
+        self.colors: list[Color] = []
+        self._brightness = 1.0
+        self._connected = False
+
+    async def connect(self) -> None:
+        self._connected = True
+
+    async def disconnect(self) -> None:
+        self._connected = False
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected
+
+    @property
+    def brightness(self) -> float:
+        return self._brightness
+
+    async def set_color(self, color: Color, *, fade: bool = False) -> None:
+        self.colors.append(color)
+
+    async def set_brightness(self, level: float) -> None:
+        self._brightness = level
+
+    async def turn_on(self, *, fade: bool = False) -> None:
+        pass
+
+    async def turn_off(self, *, fade: bool = False) -> None:
+        self.colors.append(Color())
