@@ -64,12 +64,13 @@ def test_sequence_holds_fades_and_loops():
 def test_play_sends_only_changed_frames_for_the_duration():
     async def scenario():
         light = RecordingLight()
-        await effects.play(light, effects.strobe(Color(r=255), hz=10), duration=0.35, fps=100)
+        await effects.play(light, effects.strobe(Color(r=255), hz=5), duration=0.7, fps=50)
         return light.colors
 
     colors = asyncio.run(scenario())
     assert colors[0] == Color(r=255)
-    # 10 Hz for 0.35 s is 3.5 cycles = 7 on/off phases; sampled at 100 fps, duplicates are skipped
+    # 5 Hz for 0.7 s is 3.5 cycles = 7 on/off phases; sampled at 50 fps, duplicates are skipped.
+    # The phases are long enough for a coarse clock: Windows ticks every 16 ms.
     assert 6 <= len(colors) <= 8
     assert all(a != b for a, b in itertools.pairwise(colors))
 
