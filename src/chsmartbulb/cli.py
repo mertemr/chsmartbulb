@@ -1,7 +1,7 @@
 """Command line front end: ``chsmartbulb --address AA:BB:CC:DD:EE:FF <command>``.
 
-Commands go to the background service when one is running, and straight to the
-bulb otherwise.
+Commands go to the background service when one is running (or to one on another
+machine with ``--host``), and straight to the bulb otherwise.
 """
 
 from __future__ import annotations
@@ -15,15 +15,16 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import catalog, effects, service
+from . import catalog, client, effects, service
 from . import protocol as p
 from .bulb import ChSmartBulb
 from .color import NAMED, Color, parse_color
 from .errors import SmartBulbError
-from .music import DEFAULT_DEVICE, MusicSource
+from .music import BACKENDS, DEFAULT_DEVICE, MusicSource
 from .protocol import NativeEffect
 
 ENV_ADDRESS = "CHSMARTBULB_ADDRESS"
+ENV_TOKEN = "CHSMARTBULB_TOKEN"
 _DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
@@ -99,6 +100,7 @@ def _print_timer(timer: dict[str, Any]) -> None:
 def _print(command: str, reply: dict[str, Any]) -> None:
     if command == "status":
         print(f"bulb:       {'connected' if reply['connected'] else 'not connected'}")
+        print(f"audio:      {reply['audio']}")
         print(f"light:      {'on' if reply['on'] else 'off'}")
         print(f"colour:     {reply['color']}")
         print(f"brightness: {round(reply['brightness'] * 100)}%")
@@ -140,14 +142,35 @@ def _bulb(args: argparse.Namespace, **options: Any) -> ChSmartBulb:
 
 
 def _music(args: argparse.Namespace) -> functools.partial[MusicSource]:
-    return functools.partial(MusicSource, device=args.audio_device)
+    return functools.partial(MusicSource, device=args.audio_device, backend=args.audio_backend)
+
+
+def _listen(text: str) -> tuple[str, int]:
+    host, separator, port = text.rpartition(":")
+    if not port.isdigit():
+        raise argparse.ArgumentTypeError("expected PORT or HOST:PORT")
+    return (host if separator else "0.0.0.0", int(port))
+
+
+def _remote(args: argparse.Namespace) -> client.Remote:
+    if not args.token:
+        raise SmartBulbError(f"--host needs the service's token: use --token or set ${ENV_TOKEN}")
+    return client.Remote.parse(args.host, args.token)
 
 
 async def _daemon(args: argparse.Namespace) -> None:
+    if args.listen is not None and not args.token:
+        raise SmartBulbError(f"--listen needs a token: use --token or set ${ENV_TOKEN}")
     bulb = _bulb(args, auto_reconnect=False)
     state_path = None if args.no_state else service.default_state_path()
     daemon = service.BulbService(bulb, state_path=state_path, fps=args.fps, music_factory=_music(args))
-    await daemon.serve(args.socket)
+    await daemon.serve(args.socket, listen=args.listen, token=args.token)
+
+
+async def _agent(args: argparse.Namespace) -> None:
+    target = _remote(args) if args.host else args.socket
+    _music(args)()  # fail now if capture cannot work on this machine
+    await client.run_agent(target, source_factory=_music(args))
 
 
 async def _direct(args: argparse.Namespace, request: dict[str, Any]) -> dict[str, Any]:
@@ -167,11 +190,16 @@ async def _run(args: argparse.Namespace) -> None:
     if args.command == "daemon":
         await _daemon(args)
         return
+    if args.command == "audio-agent":
+        await _agent(args)
+        return
     request = _request(args)
     if request["cmd"] == "effects":
         reply: dict[str, Any] = {"ok": True, "effects": catalog.describe()}
-    elif not args.direct and await service.is_running(args.socket):
-        reply = await service.call(args.socket, request)
+    elif args.host:
+        reply = await client.call(_remote(args), request)
+    elif not args.direct and await client.is_running(args.socket):
+        reply = await client.call(args.socket, request)
     else:
         reply = await _direct(args, request)
     if not reply["ok"]:
@@ -191,12 +219,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--channel", type=int, default=p.RFCOMM_CHANNEL, help="RFCOMM channel (default 2)")
     parser.add_argument("--socket", type=Path, default=service.default_socket_path(), help="service socket path")
     parser.add_argument("--direct", action="store_true", help="talk to the bulb even if a service is running")
+    parser.add_argument("--host", metavar="HOST[:PORT]", help="use the service on another machine")
+    parser.add_argument(
+        "--token", default=os.environ.get(ENV_TOKEN), help=f"shared secret for network access (or set ${ENV_TOKEN})"
+    )
     parser.add_argument(
         "--audio-device",
         default=DEFAULT_DEVICE,
         metavar="SOURCE",
         help="audio source for sound-reactive effects (default: monitor of the default output)",
     )
+    parser.add_argument("--audio-backend", choices=BACKENDS, default="auto", help="how the audio is captured")
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -206,6 +239,14 @@ def build_parser() -> argparse.ArgumentParser:
     cmd = sub.add_parser("daemon", help="run the background service in the foreground")
     cmd.add_argument("--fps", type=float, default=effects.DEFAULT_FPS, help="effect frame rate")
     cmd.add_argument("--no-state", action="store_true", help="do not remember the light state across restarts")
+    cmd.add_argument(
+        "--listen",
+        type=_listen,
+        metavar="[HOST:]PORT",
+        help=f"also accept other machines on this address (needs a token; usual port {client.DEFAULT_PORT})",
+    )
+
+    sub.add_parser("audio-agent", help="analyse this machine's audio and feed it to a service (see --host)")
 
     sub.add_parser("status", help="show the connection, the light state and the running effect")
     sub.add_parser("info", help="show name, version and model")
@@ -261,7 +302,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    quiet = logging.INFO if args.command == "daemon" else logging.WARNING
+    quiet = logging.INFO if args.command in ("daemon", "audio-agent") else logging.WARNING
     logging.basicConfig(level=logging.DEBUG if args.verbose else quiet, format="%(levelname)s %(message)s")
     try:
         asyncio.run(_run(args))

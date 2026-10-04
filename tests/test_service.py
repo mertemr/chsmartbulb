@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from chsmartbulb import ChSmartBulb, service
+from chsmartbulb import ChSmartBulb, client, service
 from chsmartbulb.cli import main
 from chsmartbulb.errors import SmartBulbError
 from fakes import FakeBulbTransport, FakeMusic
@@ -243,9 +243,9 @@ def test_requests_travel_over_the_socket_and_the_cli_uses_it(tmp_path, capsys):
         daemon = service.BulbService(ChSmartBulb(transport, auto_reconnect=False), retry_delay=0.01)
         server = asyncio.create_task(daemon.serve(socket_path))
         await until(lambda: socket_path.exists() and bool(transport.opened))
-        assert await service.is_running(socket_path)
+        assert await client.is_running(socket_path)
 
-        reply = await service.call(socket_path, {"cmd": "color", "color": "#00ff00"})
+        reply = await client.call(socket_path, {"cmd": "color", "color": "#00ff00"})
         assert reply == {"ok": True}
         assert transport.last_light["g"] == 255
 
@@ -258,7 +258,7 @@ def test_requests_travel_over_the_socket_and_the_cli_uses_it(tmp_path, capsys):
         server.cancel()
         await asyncio.gather(server, return_exceptions=True)
         assert not socket_path.exists()
-        assert not await service.is_running(socket_path)
+        assert not await client.is_running(socket_path)
 
     run(scenario())
     out = capsys.readouterr().out

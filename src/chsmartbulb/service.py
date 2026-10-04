@@ -1,13 +1,17 @@
 """Background service: keeps the connection, the running effect and the remembered state.
 
-Requests and replies are JSON objects, one per line, over a Unix socket. The same
-:meth:`BulbService.handle` also serves the command line when no service is running.
+Requests and replies are JSON objects, one per line, over a Unix socket and,
+optionally, over TCP for other machines (those must present a token first). The
+same :meth:`BulbService.handle` also serves the command line when no service is
+running.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
+import hmac
 import json
 import logging
 import os
@@ -19,9 +23,10 @@ from typing import TYPE_CHECKING, Any
 
 from . import catalog, effects
 from . import protocol as p
+from .client import is_running
 from .color import WHITE, Color, parse_color
 from .errors import ConnectionFailed, NotConnected, SmartBulbError, TransportError
-from .music import AudioSource, MusicSource
+from .music import AudioSource, Levels, MusicSource, RemoteAudio
 from .protocol import NativeEffect
 
 if TYPE_CHECKING:
@@ -37,7 +42,8 @@ _MAX_RETRY_DELAY = 60.0
 
 def default_socket_path() -> Path:
     runtime = os.environ.get("XDG_RUNTIME_DIR")
-    base = Path(runtime) if runtime else Path(tempfile.gettempdir()) / f"chsmartbulb-{os.getuid()}"
+    user = os.getuid() if hasattr(os, "getuid") else os.environ.get("USERNAME", "user")
+    base = Path(runtime) if runtime else Path(tempfile.gettempdir()) / f"chsmartbulb-{user}"
     return base / "chsmartbulb.sock"
 
 
@@ -98,7 +104,11 @@ class BulbService:
         self._adopt_on_connect = True  # no remembered state yet: take over what the bulb shows
         self._effect_task: asyncio.Task[None] | None = None
         self._music: AudioSource | None = None
+        self._remote = RemoteAudio()
+        self._agents = 0
+        self._lock = asyncio.Lock()  # one request changes the plan at a time
         self._supervisor: asyncio.Task[None] | None = None
+        self.tcp_address: tuple[str, int] | None = None
         self._commands: dict[str, Callable[[Mapping[str, Any]], Awaitable[dict[str, Any]]]] = {
             "status": self._status,
             "on": self._on,
@@ -225,7 +235,7 @@ class BulbService:
     async def _start_effect(self, spec: Mapping[str, Any], duration: float | None) -> None:
         info = catalog.CATALOG[spec["name"]]
         if info.needs_audio:
-            self._music = self._music_factory()
+            self._music = self._audio_source()
             await self._music.start()
         effect = catalog.create(spec["name"], spec.get("params"), audio=self._music)
         self._effect_task = asyncio.create_task(self._run_effect(effect, duration))
@@ -250,8 +260,38 @@ class BulbService:
     def _check_effect(self, name: str, params: Mapping[str, Any]) -> None:
         """Build the effect once, so a bad request fails before it reaches the plan."""
         catalog.resolve(name, params)
-        audio = self._music_factory() if catalog.CATALOG[name].needs_audio else None
+        audio = self._audio_source() if catalog.CATALOG[name].needs_audio else None
         catalog.create(name, params, audio=audio)
+
+    def _audio_source(self) -> AudioSource:
+        """An agent's feed when one is connected, local capture otherwise."""
+        return self._remote if self._agents else self._music_factory()
+
+    async def _audio_changed(self) -> None:
+        effect = self._plan.effect
+        if self._playing and effect is not None and catalog.CATALOG[effect["name"]].needs_audio:
+            await self._apply()  # restart the effect on the other source
+
+    async def _agent_joined(self) -> None:
+        async with self._lock:
+            self._agents += 1
+            log.info("audio agent connected")
+            await self._audio_changed()
+
+    async def _agent_left(self) -> None:
+        async with self._lock:
+            self._agents -= 1
+            log.info("audio agent disconnected")
+            if not self._agents:
+                self._remote.clear()
+                await self._audio_changed()
+
+    def _push_audio(self, request: Mapping[str, Any]) -> None:
+        try:
+            bass, mid, treble = (min(1.0, max(0.0, float(value))) for value in request["levels"])
+        except (KeyError, TypeError, ValueError):
+            return  # a malformed block is not worth a reply at forty a second
+        self._remote.push(Levels(bass, mid, treble), bool(request.get("beat")))
 
     async def _stop_effect(self) -> None:
         task, self._effect_task = self._effect_task, None
@@ -276,7 +316,8 @@ class BulbService:
         except KeyError:
             return {"ok": False, "error": f"unknown command {request.get('cmd')!r}"}
         try:
-            return {"ok": True, **await handler(request)}
+            async with self._lock:
+                return {"ok": True, **await handler(request)}
         except (SmartBulbError, ValueError, KeyError, TypeError) as exc:
             message = f"missing field {exc}" if isinstance(exc, KeyError) else str(exc)
             return {"ok": False, "error": message}
@@ -293,7 +334,12 @@ class BulbService:
             self._plan.brightness = float(level)
 
     async def _status(self, request: Mapping[str, Any]) -> dict[str, Any]:
-        reply: dict[str, Any] = {"connected": self._bulb.is_connected, "playing": self._playing, **self._plan.to_json()}
+        reply: dict[str, Any] = {
+            "connected": self._bulb.is_connected,
+            "playing": self._playing,
+            "audio": "agent" if self._agents else "local",
+            **self._plan.to_json(),
+        }
         if self._bulb.is_connected:
             try:
                 reply["bulb"] = (await self._bulb.get_light_state()).color.to_hex()
@@ -412,46 +458,99 @@ class BulbService:
 
     # --- socket -----------------------------------------------------------------------
 
-    async def serve(self, socket_path: Path) -> None:
-        """Run until cancelled, answering requests on ``socket_path``."""
-        if await is_running(socket_path):
+    async def serve(
+        self,
+        socket_path: Path | None,
+        *,
+        listen: tuple[str, int] | None = None,
+        token: str | None = None,
+    ) -> None:
+        """Run until cancelled, answering requests on ``socket_path`` and, if given, on TCP ``listen``.
+
+        Network clients must present ``token``; without one the service refuses to listen on TCP.
+        """
+        if listen is not None and not token:
+            raise SmartBulbError("listening on the network needs a token")
+        if socket_path is not None and await is_running(socket_path):
             raise SmartBulbError(f"a service is already listening on {socket_path}")
-        _prepare_socket_dir(socket_path)
         await self.start()
+        servers: list[asyncio.AbstractServer] = []
+        where = str(socket_path)
         try:
-            server = await asyncio.start_unix_server(self._serve_client, path=str(socket_path))
+            if socket_path is not None:
+                _prepare_socket_dir(socket_path)
+                servers.append(await asyncio.start_unix_server(self._serve_client, path=str(socket_path)))
+                _restrict(socket_path)
+            if listen is not None:
+                where = f"{listen[0]}:{listen[1]}"
+                remote = functools.partial(self._serve_client, token=token)
+                server = await asyncio.start_server(remote, listen[0], listen[1])
+                servers.append(server)
+                host, port = server.sockets[0].getsockname()[:2]
+                self.tcp_address = (host, port)
+                log.info("listening on %s:%s", host, port)
         except OSError as exc:
+            for server in servers:
+                server.close()
             await self.close()
-            raise SmartBulbError(f"cannot listen on {socket_path}: {exc}") from exc
-        _restrict(socket_path)
+            raise SmartBulbError(f"cannot listen on {where}: {exc}") from exc
+
         loop = asyncio.get_running_loop()
         main = asyncio.current_task()
         assert main is not None
-        loop.add_signal_handler(signal.SIGTERM, main.cancel)
+        with contextlib.suppress(NotImplementedError):  # no signal handlers on Windows
+            loop.add_signal_handler(signal.SIGTERM, main.cancel)
         try:
-            async with server:
-                await server.serve_forever()
+            await asyncio.gather(*(server.serve_forever() for server in servers))
         finally:
-            loop.remove_signal_handler(signal.SIGTERM)
+            with contextlib.suppress(NotImplementedError):
+                loop.remove_signal_handler(signal.SIGTERM)
+            for server in servers:
+                server.close()
             await self.close()
-            _remove(socket_path)
+            if socket_path is not None:
+                _remove(socket_path)
 
-    async def _serve_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def _serve_client(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, *, token: str | None = None
+    ) -> None:
+        """Serve one connection. ``token`` is what a network client must present first."""
+        trusted = token is None
+        is_agent = False
         try:
             while line := await reader.readline():
                 try:
                     request = json.loads(line)
                     if not isinstance(request, dict):
                         raise ValueError("request must be a JSON object")
-                    reply = await self.handle(request)
                 except ValueError as exc:
                     reply = {"ok": False, "error": f"bad request: {exc}"}
+                else:
+                    command = request.get("cmd")
+                    if command == "auth":
+                        offered = str(request.get("token", "")).encode()
+                        trusted = trusted or hmac.compare_digest(offered, (token or "").encode())
+                        reply = {"ok": True} if trusted else {"ok": False, "error": "wrong token"}
+                    elif not trusted:
+                        reply = {"ok": False, "error": "not authorised"}
+                    elif command == "audio":
+                        if not is_agent:
+                            is_agent = True
+                            await self._agent_joined()
+                        self._push_audio(request)
+                        continue  # audio blocks are not acknowledged
+                    else:
+                        reply = await self.handle(request)
                 writer.write(json.dumps(reply).encode() + b"\n")
                 await writer.drain()
+                if not trusted:
+                    break
         except ConnectionError:
             pass
         finally:
             writer.close()
+            if is_agent:
+                await self._agent_left()
 
 
 def _prepare_socket_dir(socket_path: Path) -> None:
@@ -465,32 +564,3 @@ def _restrict(socket_path: Path) -> None:
 
 def _remove(socket_path: Path) -> None:
     socket_path.unlink(missing_ok=True)
-
-
-async def is_running(socket_path: Path) -> bool:
-    """Whether a service answers on ``socket_path``."""
-    try:
-        _reader, writer = await asyncio.open_unix_connection(str(socket_path))
-    except OSError:
-        return False
-    writer.close()
-    return True
-
-
-async def call(socket_path: Path, request: Mapping[str, Any], *, wait: float = 15.0) -> dict[str, Any]:
-    """Send one request to a running service and return its reply."""
-    try:
-        reader, writer = await asyncio.open_unix_connection(str(socket_path))
-    except OSError as exc:
-        raise ConnectionFailed(f"no service on {socket_path}: {exc}") from exc
-    try:
-        writer.write(json.dumps(request).encode() + b"\n")
-        await writer.drain()
-        line = await asyncio.wait_for(reader.readline(), wait)
-    except asyncio.TimeoutError:
-        raise SmartBulbError("the service did not answer in time") from None
-    finally:
-        writer.close()
-    if not line:
-        raise SmartBulbError("the service closed the connection without answering")
-    return json.loads(line)
