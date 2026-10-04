@@ -164,6 +164,7 @@ def test_capture_backend_follows_what_the_machine_has(monkeypatch):
     monkeypatch.setattr(music.shutil, "which", lambda name: "/usr/bin/parec")
     assert source._pick_backend() == "parec"
     monkeypatch.setattr(music.shutil, "which", lambda name: None)
+    monkeypatch.setattr(music.sys, "platform", "linux")
     assert source._pick_backend() == "soundcard"
     monkeypatch.setattr(music.sys, "platform", "win32")
     assert source._pick_backend() == "wasapi"
