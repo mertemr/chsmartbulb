@@ -251,7 +251,10 @@ class MusicSource(_Published):
             if error is None:
                 finished.set_result(None)
             else:
-                finished.set_exception(SmartBulbError(f"sound capture failed: {error}"))
+                # some of soundcard's failures are bare assertions, so name the type too
+                failure = SmartBulbError(f"sound capture failed: {type(error).__name__}: {error}".rstrip(": "))
+                failure.__cause__ = error
+                finished.set_exception(failure)
 
         def record() -> None:
             try:

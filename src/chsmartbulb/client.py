@@ -121,6 +121,7 @@ async def run_agent(
             await _stream(target, source_factory())
         except SmartBulbError as exc:
             log.warning("%s; retrying in %g s", exc, retry_delay)
+            log.debug("details", exc_info=exc)
         else:
             log.warning("the service closed the connection; retrying in %g s", retry_delay)
         await asyncio.sleep(retry_delay)

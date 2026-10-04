@@ -1,6 +1,9 @@
 """Named effects and the sound analysis behind the reactive ones."""
 
+import asyncio
 import math
+import sys
+import types
 
 import pytest
 
@@ -164,6 +167,56 @@ def test_capture_backend_follows_what_the_machine_has(monkeypatch):
     assert music.MusicSource(backend="parec")._pick_backend() == "parec"
     with pytest.raises(ValueError, match="backend"):
         music.MusicSource(backend="alsa")
+
+
+def test_soundcard_capture_feeds_the_analysis_and_names_its_failures(monkeypatch):
+    class Recorder:
+        def __init__(self, frames):
+            self.frames = frames
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def record(self, numframes):
+            if not self.frames:
+                raise AssertionError  # how soundcard reports an output format it cannot handle
+            return self.frames.pop(0)
+
+    class Device:
+        name = "Speakers"
+
+        def __init__(self, frames):
+            self.frames = frames
+
+        def recorder(self, samplerate, channels, blocksize):
+            return Recorder(self.frames)
+
+    t = np.arange(music.BLOCK) / music.RATE
+    loud = (0.5 * np.sin(2 * math.pi * 100 * t)).astype("float32").reshape(-1, 1)
+    asked = []
+
+    def get_microphone(id, include_loopback):
+        asked.append((id, include_loopback))
+        return Device([loud, loud, loud])
+
+    fake = types.SimpleNamespace(default_speaker=lambda: Device([]), get_microphone=get_microphone)
+    monkeypatch.setitem(sys.modules, "soundcard", fake)
+
+    async def scenario():
+        source = music.MusicSource(backend="soundcard")
+        await source.start()
+        with pytest.raises(SmartBulbError, match="sound capture failed: AssertionError") as caught:
+            await source.wait()
+        assert isinstance(caught.value.__cause__, AssertionError)
+        await asyncio.sleep(0)  # let the last queued blocks reach the analysis
+        return source
+
+    source = asyncio.run(scenario())
+    assert asked == [("Speakers", True)]  # the default output's loopback
+    assert source.levels.bass > 0.9
 
 
 def test_delay_is_set_through_the_effect_parameters():
