@@ -1,0 +1,35 @@
+LE ATT connected
+MTU rsp: 03c800
+
+Primary services:
+  0x0001-0x0005  0x1800
+  0x0006-0x000a  0x1800
+  0x000b-0x000e  0x6666
+  0x000f-0x0011  0x7777
+
+Characteristics:
+  decl 0x0002 value 0x0003 uuid 0x2a00 props 0x0a ['read', 'write']
+  decl 0x0004 value 0x0005 uuid 0x2a04 props 0x02 ['read']
+  decl 0x0007 value 0x0008 uuid 0x2a00 props 0x0a ['read', 'write']
+  decl 0x0009 value 0x000a uuid 0x2a04 props 0x02 ['read']
+  decl 0x000c value 0x000d uuid 0x8888 props 0xde ['read', 'write-no-rsp', 'write', 'notify', 'signed-write', 'ext']
+  decl 0x0010 value 0x0011 uuid 0x8877 props 0x4e ['read', 'write-no-rsp', 'write', 'signed-write']
+
+All attributes (handle -> type):
+  0x0001                               0x2800  read=0018 ''
+  0x0002                               0x2803  read=0a0300002a ''
+  0x0003                               0x2a00  read=536d61727442756c6220426c7565746f6f7468 'SmartBulb Bluetooth'
+  0x0004                               0x2803  read=020500042a ''
+  0x0005                               0x2a04  read=0600060000000a00 ''
+  0x0006                               0x2800  read=0018 ''
+  0x0007                               0x2803  read=0a0800002a ''
+  0x0008                               0x2a00  read=4c452053616d706c652044657669636500 ''
+  0x0009                               0x2803  read=020a00042a ''
+  0x000a                               0x2a04  read=0600060000000a00 ''
+  0x000b                               0x2800  read=6666 'ff'
+  0x000c                               0x2803  read=de0d008888 ''
+  0x000d                               0x8888  read=88888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888 ''
+  0x000e                               0x2902  read=0100 ''
+  0x000f                               0x2800  read=7777 'ww'
+  0x0010                               0x2803  read=4e11007788 ''
+  0x0011                               0x8877  read=77777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777 'wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww'

@@ -1,0 +1,22 @@
+== r=255,effect=0x52,speed=0x00  (readback 0000ff0000000000)
+   R    0.1.. 130.6   G  -17.4..   0.6   B  -11.6..   0.7   n=212 period~0.46s
+== r=255,effect=0x52,speed=0x10  (readback 0000ff0000000000)
+   R    0.1.. 130.5   G  -17.4..   0.9   B  -11.7..   1.0   n=211 period~0.34s
+== r=255,effect=0x52,speed=0x41  (readback 0000ff0000000000)
+   R    0.8.. 131.0   G  -17.2..   0.9   B  -11.3..   0.9   n=211 period~0.83s
+== r=255,effect=0x52,speed=0x80  (readback 0000ff0000000000)
+   R    1.0.. 131.5   G  -17.1..   0.9   B  -11.2..   1.0   n=210 period~1.17s
+== r=255,effect=0x52,speed=0x82  (readback 0000ff0000000000)
+   R    1.0.. 132.1   G  -17.2..   1.1   B  -11.3..   1.1   n=212 period~1.45s
+== r=255,effect=0x52,speed=0x8f  (readback 0000ff0000000000)
+   R    1.0.. 132.7   G  -17.2..   1.0   B  -11.3..   1.2   n=210 period~1.51s
+== r=255,effect=0x52,speed=0x02  (readback 0000ff0000000000)
+   R    0.9.. 133.5   G  -17.4..   0.9   B  -11.7..   1.1   n=211 period~0.46s
+== r=255,effect=0x52,speed=0xf3  (readback 0000ff0000000000)
+   R    0.9.. 133.4   G  -17.4..   0.8   B  -11.6..   1.0   n=212 period~2.38s
+== r=255,effect=0x54,speed=0x00  (readback 0000ff0000000000)
+   R   -0.1.. 134.0   G  -17.9..   0.6   B  -12.6..   0.8   n=211 period~0.12s
+== r=255,effect=0x54,speed=0x41  (readback 0000ff0000000000)
+   R   -0.1.. 134.2   G  -17.9..  -0.1   B  -12.7..   0.1   n=211 period~0.25s
+== r=255,effect=0x54,speed=0xf3  (readback 0000ff0000000000)
+   R   -0.9.. 134.5   G  -18.1..  -0.0   B  -13.2..   0.2   n=211 period~0.49s

@@ -1,0 +1,30 @@
+original state: 0000000000ff0000
+exposure 50: mean=39.4 saturated=0.006
+exposure 80: mean=62.2 saturated=0.007
+exposure 120: mean=84.0 saturated=0.007
+exposure 166: mean=104.8 saturated=0.008
+exposure 250: mean=134.6 saturated=0.009
+exposure 400: mean=171.5 saturated=0.036
+exposure 800: mean=224.8 saturated=0.506
+chosen exposure: 250
+red    frame mean RGB = [144.1  86.6  97.2]  state=0000ff0000000000
+green  frame mean RGB = [103.6 113.  108.2]  state=ff00000000000000
+blue   frame mean RGB = [ 97.1 107.5 168.8]  state=00ff000000000000
+white  frame mean RGB = [137.  128.6 139.2]  state=0000000000ff0000
+dark   frame mean RGB = [103.1  92.   98.6]  state=0000000000000000
+ROI pixels: 1868 / 14400; change threshold 238.5; max change 580.0
+ROI bbox x 30..121 y 4..68 (frame 160x90)
+ROI red    -> ((181.4, 81.1, 95.8), 0.0)
+ROI green  -> ((102.8, 129.1, 115.8), 0.0)
+ROI blue   -> ((88.9, 120.1, 222.4), 0.0)
+ROI white  -> ((160.6, 154.2, 167.7), 0.0)
+ROI yellow -> ((105.6, 94.3, 101.2), 0.0)
+ROI dark   -> ((105.7, 94.4, 101.3), 0.0)
+restored state: 0000000000ff0000
+[vost#0:0/rawvideo @ 0x558d8bc0eb80] Error submitting a packet to the muxer: Broken pipe
+    Last message repeated 1 times
+[out#0/rawvideo @ 0x558d8bc0e800] Error muxing a packet
+[out#0/rawvideo @ 0x558d8bc0e800] Task finished with error code: -32 (Broken pipe)
+[out#0/rawvideo @ 0x558d8bc0e800] Terminating thread with return code -32 (Broken pipe)
+[out#0/rawvideo @ 0x558d8bc0e800] Error writing trailer: Broken pipe
+[out#0/rawvideo @ 0x558d8bc0e800] Error closing file: Broken pipe

@@ -1,0 +1,20 @@
+A1 no-hello query 51 02 -> 01fe000041021000470c000000000000
+A2 no-hello light blue -> cam ((0.4, 67.7, 215.7), 0.01) state 00ff000000000000
+   dark (np.float64(22.0), np.float64(15.3), np.float64(21.7))
+   connect attempt 0 failed: [Errno 16] Device or resource busy
+B latency send->visible (s, includes camera delay): [0.109, 0.1, 0.09, 0.089, 0.098, 0.097]
+C interval   200 ms: sent 10 in 2.01s, camera saw 9 flips during, 0 flips after stop, final=blue (expected blue), state=00ff000000000000
+C interval   100 ms: sent 20 in 2.04s, camera saw 20 flips during, 0 flips after stop, final=blue (expected blue), state=00ff000000000000
+C interval    66 ms: sent 30 in 2.01s, camera saw 29 flips during, 0 flips after stop, final=blue (expected blue), state=00ff000000000000
+C interval    40 ms: sent 50 in 2.03s, camera saw 45 flips during, 0 flips after stop, final=blue (expected blue), state=00ff000000000000
+C interval    20 ms: sent 100 in 2.01s, camera saw 23 flips during, 0 flips after stop, final=blue (expected blue), state=00ff000000000000
+C interval    10 ms: sent 200 in 2.02s, camera saw 2 flips during, 0 flips after stop, final=blue (expected blue), state=00ff000000000000
+D before idle: ((10.1, 84.9, 51.9), 0.002)
+D after 25 s idle, set red: ((152.8, 0.7, 10.2), 0.003) state 0000ff0000000000
+E volume now: Volume: 0.71
+E status    : 00 1f 00 16 00 00 00 05 00 00 02 00 00 00 00 00 00 04 88 11 02 10 00 00
+E volume 0.30 -> status 00 1f 00 16 00 00 00 05 00 00 02 00 00 00 00 00 00 04 88 11 02 10 00 00
+E volume 1.00 -> status 00 1f 00 16 00 00 00 05 00 00 02 00 00 00 00 00 00 04 88 11 02 10 00 00
+E volume 0.00 -> status 00 1f 00 16 00 00 00 05 00 00 02 00 00 00 00 00 00 04 88 11 02 10 00 00
+E restored Volume: 0.71 -> status 00 1f 00 16 00 00 00 05 00 00 02 00 00 00 00 00 00 04 88 11 02 10 00 00
+restored light: 0000000000ff0000

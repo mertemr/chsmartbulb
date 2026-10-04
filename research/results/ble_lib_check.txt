@@ -1,0 +1,10 @@
+BLE connected in 0.5s; on=True colour=#000000ff
+info  : DeviceInfo(name='SmartBulb Bluetooth', version='1.0.', model='BL04', model_id=3143, device_id=22652)
+timers: [(6, 'power off', False, '06:20'), (5, 'power on', False, '10:35')]
+status: 00 1f 00 16 00 00 00 05 00 00 02 00 00 00 00 00 00 04 88 11 02 10 00 00
+red            -> (123.4, -15.7, -12.1) #ff0000
+brightness 0.2 -> (37.2, -5.0, -3.0)
+blue (fade)    -> (-23.0, 51.1, 189.9) #0000ff
+30 colour writes took 2.25s
+hue_cycle at 20 fps requested: 40 frames sent in 3 s
+white          -> (93.4, 97.4, 111.4) #000000ff
