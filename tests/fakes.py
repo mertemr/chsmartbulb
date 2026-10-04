@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import math
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from chsmartbulb import protocol as p
 from chsmartbulb.color import Color
@@ -12,6 +13,9 @@ from chsmartbulb.errors import ConnectionFailed, TransportError
 from chsmartbulb.light import Light
 from chsmartbulb.music import Levels
 from chsmartbulb.transport import Transport
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 NAME_ANSWER = bytes.fromhex(
     "01fe0000418050000000000000000000312e302e00000003536d61727442756c6220426c7565746f6f7468"
@@ -188,3 +192,34 @@ class FakeMusic:
 
     async def stop(self) -> None:
         self.running = False
+
+
+class ScriptedSource:
+    """Stands in for a capturing :class:`MusicSource`: emits the given blocks, then idles."""
+
+    def __init__(self, blocks: list[tuple[Levels, bool]], interval: float = 0.005) -> None:
+        self.blocks = blocks
+        self.interval = interval
+        self.on_block: Callable[[Levels, bool], None] | None = None
+        self._task: asyncio.Task[None] | None = None
+
+    async def start(self) -> None:
+        self._task = asyncio.create_task(self._emit())
+
+    async def _emit(self) -> None:
+        for levels, beat in self.blocks:
+            if self.on_block is not None:
+                self.on_block(levels, beat)
+            await asyncio.sleep(self.interval)
+        await asyncio.Event().wait()  # a real capture never ends on its own
+
+    async def wait(self) -> None:
+        if self._task is not None:
+            await self._task
+
+    async def stop(self) -> None:
+        task, self._task = self._task, None
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task

@@ -127,6 +127,45 @@ def test_delay_holds_levels_and_beats_back():
     assert source.levels == music.Levels()
 
 
+def test_remote_audio_applies_delay_and_clears():
+    clock = Clock()
+    remote = music.RemoteAudio(clock=clock)
+    remote.delay = 0.2
+    remote.push(music.Levels(bass=1.0), True)
+    assert (remote.levels, remote.beats) == (music.Levels(), 0)
+    clock.now = 0.25
+    remote.push(music.Levels(), False)
+    assert (remote.levels.bass, remote.beats, remote.last_beat) == (1.0, 1, 0.2)
+    remote.clear()
+    assert remote.levels == music.Levels()
+    clock.now = 1.0
+    remote.push(music.Levels(mid=0.5), False)
+    assert remote.levels == music.Levels()  # the block pushed before the clear is gone, this one is still held
+
+
+def test_on_block_sees_every_block_before_any_delay():
+    clock = Clock()
+    source = music.MusicSource(clock=clock)
+    source.delay = 1.0
+    seen = []
+    source.on_block = lambda levels, beat: seen.append((levels.bass > 0.9, beat))
+    feed(source, clock, tone(80, 0.1))
+    assert seen[0] == (True, True)
+    assert len(seen) == 4  # 0.1 s is four full blocks
+    assert source.beats == 0  # the source's own view is still held back
+
+
+def test_capture_backend_follows_what_the_machine_has(monkeypatch):
+    source = music.MusicSource()
+    monkeypatch.setattr(music.shutil, "which", lambda name: "/usr/bin/parec")
+    assert source._pick_backend() == "parec"
+    monkeypatch.setattr(music.shutil, "which", lambda name: None)
+    assert source._pick_backend() == "soundcard"
+    assert music.MusicSource(backend="parec")._pick_backend() == "parec"
+    with pytest.raises(ValueError, match="backend"):
+        music.MusicSource(backend="alsa")
+
+
 def test_delay_is_set_through_the_effect_parameters():
     source = FakeMusic()
     catalog.create("music", {"delay": 0.25}, audio=source)

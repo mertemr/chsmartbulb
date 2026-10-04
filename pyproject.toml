@@ -21,7 +21,11 @@ Documentation = "https://github.com/mertemr/chsmartbulb/tree/main/docs"
 
 [project.optional-dependencies]
 ble = ["bleak>=0.22"]
-audio = ["numpy>=1.24"]
+audio = [
+    "numpy>=1.24",
+    # loopback capture where there is no parec
+    "soundcard>=0.4.3; sys_platform == 'win32'",
+]
 
 [project.scripts]
 chsmartbulb = "chsmartbulb.cli:main"
@@ -29,6 +33,7 @@ chsmartbulb = "chsmartbulb.cli:main"
 [dependency-groups]
 dev = [
     "numpy>=1.24",
+    "soundcard>=0.4.3",
     "pytest>=9.1.1",
     "ruff>=0.16.10",
     "ty>=0.0.84",
@@ -84,7 +89,7 @@ python-platform = "linux"
 exclude = ["research"]
 
 [tool.ty.analysis]
-allowed-unresolved-imports = ["bleak", "bleak.**"]
+allowed-unresolved-imports = ["bleak", "bleak.**", "soundcard"]
 
 [tool.uv]
 # uv's downloadable Python builds are compiled without Bluetooth sockets.
