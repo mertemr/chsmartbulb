@@ -122,3 +122,21 @@ def test_screen_effect_sends_grey_to_the_white_leds():
     assert Color(r=255, g=40).with_white() == Color(r=255, g=40)  # nothing grey in it
     with pytest.raises(ValueError, match="white"):
         catalog.create("screen", {"white": 2}, screen=source)
+
+
+def test_balance_keeps_hues_true_without_dimming_pure_colours():
+    assert screen.balanced(Color(r=255, g=255)) == Color(r=122, g=255)  # yellow needs far less red than green
+    assert screen.balanced(Color(r=255)) == Color(r=255)
+    assert screen.balanced(Color(r=255, g=20)) == Color(r=255, g=42)  # the strongest channel stays put
+    assert screen.balanced(Color(128, 128, 128, 40)) == Color(61, 128, 29, 40)  # the white LEDs are left alone
+    assert screen.balanced(Color(r=255, g=255), 0.0) == Color(r=255, g=255)
+    assert screen.balanced(Color(r=255, g=255), 0.5).r == 177  # half way, on a ratio scale
+    assert screen.balanced(Color()) == Color()
+
+    source = RemoteScreen()
+    source.push(Color(r=200, g=200, b=100))
+    params = {"smoothing": 0, "saturation": 1}
+    assert catalog.create("screen", params, screen=source)(0.0) == Color(r=100, g=100, w=100)  # off unless asked for
+    assert catalog.create("screen", {**params, "balance": 1}, screen=source)(0.0) == Color(r=48, g=100, w=100)
+    with pytest.raises(ValueError, match="balance"):
+        catalog.create("screen", {"balance": 2}, screen=source)

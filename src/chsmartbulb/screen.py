@@ -33,6 +33,9 @@ log = logging.getLogger(__name__)
 
 _SAMPLES = 64  # pixels kept along the shorter side
 _VIVID = 4.0  # how much more a fully saturated pixel counts than a grey one
+# Red and blue, as fractions of the green value, that mix to the colour of the bulb's white LEDs.
+# Measured with a webcam on one unit (research/balance.py); the green LEDs are by far the weakest.
+_NEUTRAL = (0.48, 1.0, 0.23)
 
 
 class ScreenSource(Protocol):
@@ -189,8 +192,26 @@ class ScreenCapture:
             stopping.set()
 
 
+def balanced(color: Color, strength: float = 1.0) -> Color:
+    """Weaken red and blue so that mixed colours keep their hue on the bulb.
+
+    The strongest channel stays where it was, so pure colours are not dimmed;
+    only the proportions change. ``strength`` 0 leaves the colour alone.
+    """
+    top = max(color.r, color.g, color.b)
+    if not top or not strength:
+        return color
+    r, g, b = (channel * gain**strength for channel, gain in zip((color.r, color.g, color.b), _NEUTRAL, strict=True))
+    scale = top / max(r, g, b)
+    return Color(round(r * scale), round(g * scale), round(b * scale), color.w)
+
+
 def screen_follow(
-    source: ScreenSource, smoothing: float = 0.2, saturation: float = 1.5, white: float = 1.0
+    source: ScreenSource,
+    smoothing: float = 0.2,
+    saturation: float = 1.5,
+    white: float = 1.0,
+    balance: float = 0.0,
 ) -> Effect:
     """Show the colour of the screen.
 
@@ -199,6 +220,7 @@ def screen_follow(
     colourfulness: 1 leaves the screen's colour as it is, more makes it purer.
     ``white`` (0..1) is how much of the grey in the colour goes to the white
     LEDs: the bulb's red, green and blue together make a blue-violet, not a white.
+    ``balance`` (0..1) corrects the rest for the weak green LEDs, see :func:`balanced`.
     """
     if smoothing < 0.0:
         raise ValueError("smoothing must not be negative")
@@ -206,6 +228,8 @@ def screen_follow(
         raise ValueError("saturation must not be negative")
     if not 0.0 <= white <= 1.0:
         raise ValueError("white must be within 0..1")
+    if not 0.0 <= balance <= 1.0:
+        raise ValueError("balance must be within 0..1")
     shown = [0.0, 0.0, 0.0]
     last = 0.0
 
@@ -218,6 +242,7 @@ def screen_follow(
         for i, channel in enumerate((target.r, target.g, target.b)):
             shown[i] += (channel - shown[i]) * blend
         hue, colourfulness, value = colorsys.rgb_to_hsv(*(channel / 255.0 for channel in shown))
-        return Color.from_hsv(hue * 360.0, min(1.0, colourfulness * saturation), value).with_white(white)
+        color = Color.from_hsv(hue * 360.0, min(1.0, colourfulness * saturation), value)
+        return balanced(color.with_white(white), balance)
 
     return effect

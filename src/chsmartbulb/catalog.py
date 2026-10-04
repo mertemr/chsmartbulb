@@ -72,7 +72,7 @@ _ENTRIES = [
         "screen",
         "follow the colour of the screen",
         screen.screen_follow,
-        {"smoothing": 0.2, "saturation": 1.5, "white": 1.0},
+        {"smoothing": 0.2, "saturation": 1.5, "white": 1.0, "balance": 0.0},
         needs="screen",
     ),
 ]
