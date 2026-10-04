@@ -1,6 +1,7 @@
 """Reaching the service from other machines: TCP, the token, and the audio agent."""
 
 import asyncio
+import json
 import os
 
 import pytest
@@ -8,7 +9,7 @@ import pytest
 from chsmartbulb import ChSmartBulb, client, service
 from chsmartbulb.cli import main
 from chsmartbulb.errors import ConnectionFailed, SmartBulbError
-from chsmartbulb.music import Levels
+from chsmartbulb.music import Levels, RemoteAudio
 from fakes import FakeBulbTransport, FakeMusic, ScriptedSource
 
 TOKEN = "s3cret"
@@ -95,7 +96,7 @@ def test_agent_feed_drives_the_music_effect_and_local_capture_takes_over_when_it
             await asyncio.sleep(0.03)
             assert not hub.transport.light_bodies or hub.transport.channels == [0, 0, 0, 0, 0]  # silence is dark
 
-            blocks = [(Levels(bass=1.0), True)] + [(Levels(bass=0.8), False)] * 200
+            blocks = [(Levels(bass=1.0), 8.0)] + [(Levels(bass=0.8), 0.9)] * 200
             agent = asyncio.create_task(
                 client.run_agent(hub.remote, source_factory=lambda: ScriptedSource(blocks), retry_delay=0.01)
             )
@@ -116,8 +117,8 @@ def test_agent_sends_nothing_while_nothing_plays():
     async def scenario():
         async with Hub() as hub:
             sent = []
-            faint = (Levels(mid=0.0004), False)  # rounds to nothing on the wire
-            blocks = [(Levels(), False)] * 5 + [(Levels(bass=0.5), False)] + [faint] * 5
+            faint = (Levels(mid=0.0004), 0.0)  # rounds to nothing on the wire
+            blocks = [(Levels(), 0.0)] * 5 + [(Levels(bass=0.5, balance=-0.251), 2.5)] + [faint] * 5
             source = ScriptedSource(blocks, interval=0.001)
 
             real_write = asyncio.StreamWriter.write
@@ -137,8 +138,30 @@ def test_agent_sends_nothing_while_nothing_plays():
                 await asyncio.gather(agent, return_exceptions=True)
             audio = [d for d in sent if b'"audio"' in d]
             assert len(audio) == 3  # first silent block, the sound, the first silent block after it
+            assert json.loads(audio[0]) == {"cmd": "audio", "levels": [0.0, 0.0, 0.0]}
+            assert json.loads(audio[1]) == {"cmd": "audio", "levels": [0.5, 0.0, 0.0], "onset": 2.5, "balance": -0.25}
 
     run(scenario())
+
+
+def test_audio_blocks_carry_onset_and_balance_and_older_agents_still_count():
+    now = [0.0]
+    daemon = service.BulbService(ChSmartBulb(FakeBulbTransport()), music_factory=FakeMusic)
+    remote = daemon._remote = RemoteAudio(clock=lambda: now[0])
+
+    def push(**block):
+        now[0] += 1.0
+        daemon._push_audio({"cmd": "audio", **block})
+        return remote.levels, remote.beats
+
+    assert push(levels=[1, 0.5, 0], onset=3, balance=-0.4) == (Levels(1.0, 0.5, 0.0, -0.4), 1)
+    assert push(levels=[1, 0, 0], onset=1.2) == (Levels(1.0), 1)  # not enough of a rise
+    remote.sensitivity = 1.0
+    assert push(levels=[1, 0, 0], onset=1.2)[1] == 2
+    assert push(levels=[1, 0, 0], beat=True)[1] == 3  # an agent from before the onset strength
+    assert push(levels=[1, 0, 0], balance=9)[0].balance == 1.0
+    assert push(levels="junk") == (Levels(1.0, balance=1.0), 3)
+    assert push(levels=[0, 0, 0], onset="loud") == (Levels(1.0, balance=1.0), 3)
 
 
 def test_remote_parses_host_and_port():

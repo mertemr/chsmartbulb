@@ -177,6 +177,7 @@ class FakeMusic:
         self.last_beat = -math.inf
         self.now = 0.0
         self.delay = 0.0
+        self.sensitivity = 0.5
         self.running = False
         FakeMusic.created.append(self)
 
@@ -195,21 +196,24 @@ class FakeMusic:
 
 
 class ScriptedSource:
-    """Stands in for a capturing :class:`MusicSource`: emits the given blocks, then idles."""
+    """Stands in for a capturing :class:`MusicSource`: emits the given blocks, then idles.
 
-    def __init__(self, blocks: list[tuple[Levels, bool]], interval: float = 0.005) -> None:
+    Each block is the levels and the onset strength that came with them.
+    """
+
+    def __init__(self, blocks: list[tuple[Levels, float]], interval: float = 0.005) -> None:
         self.blocks = blocks
         self.interval = interval
-        self.on_block: Callable[[Levels, bool], None] | None = None
+        self.on_block: Callable[[Levels, float], None] | None = None
         self._task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         self._task = asyncio.create_task(self._emit())
 
     async def _emit(self) -> None:
-        for levels, beat in self.blocks:
+        for levels, onset in self.blocks:
             if self.on_block is not None:
-                self.on_block(levels, beat)
+                self.on_block(levels, onset)
             await asyncio.sleep(self.interval)
         await asyncio.Event().wait()  # a real capture never ends on its own
 

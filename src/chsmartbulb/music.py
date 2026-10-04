@@ -24,7 +24,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
-from .color import OFF, Color
+from .color import BLUE, OFF, RED, Color
 from .errors import SmartBulbError
 
 if TYPE_CHECKING:
@@ -36,26 +36,38 @@ RATE = 22050
 BLOCK = 512  # 23 ms per analysis step
 DEFAULT_DEVICE = "@DEFAULT_MONITOR@"
 BACKENDS = ("auto", "parec", "wasapi", "soundcard")
+DEFAULT_SENSITIVITY = 0.5
 
 log = logging.getLogger(__name__)
 
 _BANDS_HZ = ((40, 250), (250, 2000), (2000, 8000))
 _GAIN_HALF_LIFE = 4.0  # seconds for the automatic gain to forget a loud passage
 _SILENCE = 1e-4
-_BEAT_RATIO = 1.5  # bass must exceed its recent average by this factor
 _BEAT_GAP = 0.15  # seconds; caps detection at 400 bpm
+_BEAT_FLOOR = 0.05  # a beat needs the bass above this fraction of its recent peak
+_ONSET_CAP = 100.0
+_PAN_SMOOTHING = 0.15  # seconds for the stereo position to settle
 _DARK = 1 / 255
 _MAX_DELAY = 2.0
 _STREAM_POLL = 0.5  # seconds between checks that a callback-driven stream is still alive
 
 
+def beat_ratio(sensitivity: float) -> float:
+    """How far the bass must rise above its recent average to count as a beat.
+
+    1.5 at the default sensitivity; 5 at 0 (only the hardest hits), barely above 1 at 1.
+    """
+    return 1.0 + 0.5 * 8.0 ** (1.0 - 2.0 * sensitivity)
+
+
 @dataclass(frozen=True)
 class Levels:
-    """Band loudness relative to the recent peak, each 0..1."""
+    """Band loudness relative to the recent peak, each 0..1, and where the sound sits."""
 
     bass: float = 0.0
     mid: float = 0.0
     treble: float = 0.0
+    balance: float = 0.0  # -1 all left, +1 all right
 
 
 class AudioSource(Protocol):
@@ -65,6 +77,7 @@ class AudioSource(Protocol):
     beats: int
     last_beat: float
     delay: float
+    sensitivity: float
 
     def clock(self) -> float: ...
 
@@ -76,7 +89,7 @@ class AudioSource(Protocol):
 class Capture(Protocol):
     """A running analysis whose blocks can be forwarded elsewhere."""
 
-    on_block: Callable[[Levels, bool], None] | None
+    on_block: Callable[[Levels, float], None] | None
 
     async def start(self) -> None: ...
 
@@ -90,13 +103,16 @@ class _Published:
 
     ``delay`` holds them back by that many seconds. The capture hears the sound
     before a Bluetooth speaker or headphones play it, so without a delay the
-    light runs ahead of what you hear.
+    light runs ahead of what you hear. ``sensitivity`` (0..1) decides which
+    onsets count as beats, see :func:`beat_ratio`.
     """
 
     def __init__(self, clock: Callable[[], float]) -> None:
         self._clock = clock
         self._held: deque[tuple[float, Levels, bool]] = deque()
+        self._last_onset = -math.inf
         self.delay = 0.0
+        self.sensitivity = DEFAULT_SENSITIVITY
         self.levels = Levels()
         self.beats = 0
         self.last_beat = -math.inf
@@ -105,8 +121,12 @@ class _Published:
         """The time base :attr:`last_beat` is measured on."""
         return self._clock()
 
-    def _publish(self, levels: Levels, beat: bool) -> None:
+    def _publish(self, levels: Levels, onset: float) -> None:
+        """Take one analysed block; ``onset`` is the bass relative to its recent average."""
         now = self.clock()
+        beat = onset >= beat_ratio(self.sensitivity) and now - self._last_onset > _BEAT_GAP
+        if beat:
+            self._last_onset = now
         self._held.append((now + self.delay, levels, beat))
         while self._held and self._held[0][0] <= now:
             due, self.levels, was_beat = self._held.popleft()
@@ -125,8 +145,8 @@ class RemoteAudio(_Published):
     def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
         super().__init__(clock)
 
-    def push(self, levels: Levels, beat: bool) -> None:
-        self._publish(levels, beat)
+    def push(self, levels: Levels, onset: float) -> None:
+        self._publish(levels, onset)
 
     def clear(self) -> None:
         """Forget what was pending and go silent, for when the feed stops."""
@@ -144,7 +164,8 @@ class MusicSource(_Published):
 
     :meth:`feed` does the analysis and can be driven by anything; :meth:`start`
     feeds it from the system's audio output. ``on_block`` is called with every
-    analysed block before any delay, which is what the audio agent forwards.
+    analysed block and its onset strength before any delay, which is what the
+    audio agent forwards.
     """
 
     def __init__(
@@ -152,6 +173,7 @@ class MusicSource(_Published):
         *,
         rate: int = RATE,
         block: int = BLOCK,
+        channels: int = 1,
         device: str = DEFAULT_DEVICE,
         backend: str = "auto",
         clock: Callable[[], float] = time.monotonic,
@@ -166,14 +188,13 @@ class MusicSource(_Published):
         self._np: Any = numpy
         self._device = device
         self._backend = backend
-        self.on_block: Callable[[Levels, bool], None] | None = None
-        self._configure(rate, block)
+        self.on_block: Callable[[Levels, float], None] | None = None
+        self._configure(rate, block, channels)
         self._peaks = [0.0, 0.0, 0.0]
         self._bass_average = 0.0
         self._task: asyncio.Task[None] | None = None
-        self._last_onset = -math.inf
 
-    def _configure(self, rate: int, block: int | None = None) -> None:
+    def _configure(self, rate: int, block: int | None = None, channels: int = 1) -> None:
         """Size the analysis for ``rate``; without ``block``, pick one of about 23 ms."""
         if block is None:
             block = BLOCK
@@ -181,6 +202,8 @@ class MusicSource(_Published):
                 block *= 2
         self._rate = rate
         self._block = block
+        self._channels = channels
+        self._size = block * channels * 2  # bytes per analysis step
         self._window = self._np.hanning(block)
         hz_per_bin = rate / block
         self._bins = [(max(1, round(lo / hz_per_bin)), round(hi / hz_per_bin)) for lo, hi in _BANDS_HZ]
@@ -188,15 +211,23 @@ class MusicSource(_Published):
         self._pending = bytearray()
 
     def feed(self, pcm: bytes) -> None:
-        """Consume signed 16-bit little-endian mono samples."""
+        """Consume signed 16-bit little-endian samples, interleaved when there are several channels."""
         self._pending += pcm
-        size = self._block * 2
+        size = self._size
         while len(self._pending) >= size:
             samples = self._np.frombuffer(bytes(self._pending[:size]), dtype="<i2") / 32768.0
             del self._pending[:size]
-            self._analyse(samples)
+            self._analyse(samples.reshape(-1, self._channels))
 
-    def _analyse(self, samples: Any) -> None:
+    def _balance(self, frames: Any) -> float:
+        if self._channels < 2:
+            return 0.0
+        left, right = (float(self._np.sqrt((frames[:, side] ** 2).mean())) for side in (0, 1))
+        total = left + right
+        return (right - left) / total if total > _SILENCE else 0.0
+
+    def _analyse(self, frames: Any) -> None:
+        samples = frames.mean(axis=1)
         spectrum = self._np.abs(self._np.fft.rfft(samples * self._window)) / (self._block / 2)
         values = [float(spectrum[lo:hi].mean()) for lo, hi in self._bins]
         levels = []
@@ -207,17 +238,16 @@ class MusicSource(_Published):
             levels.append(value / self._peaks[i] if heard else 0.0)
 
         bass = values[0]
-        now = self.clock()
-        beat = bass > _SILENCE and bass > _BEAT_RATIO * self._bass_average and now - self._last_onset > _BEAT_GAP
-        if beat:
-            self._last_onset = now
+        onset = 0.0
+        if levels[0] >= _BEAT_FLOOR:  # something faint after a loud passage is not a beat
+            onset = min(_ONSET_CAP, bass / self._bass_average) if self._bass_average > 0.0 else _ONSET_CAP
         # fast enough to catch up with a sustained note before the gap allows another beat
         self._bass_average += 0.25 * (bass - self._bass_average)
 
-        result = Levels(*levels)
+        result = Levels(*levels, balance=self._balance(frames))
         if self.on_block is not None:
-            self.on_block(result, beat)
-        self._publish(result, beat)
+            self.on_block(result, onset)
+        self._publish(result, onset)
 
     async def start(self) -> None:
         """Begin capturing the system's audio output in the background."""
@@ -260,14 +290,13 @@ class MusicSource(_Published):
             raise SmartBulbError(
                 "sound capture on Windows needs PyAudioWPatch: pip install chsmartbulb[audio]"
             ) from None
-        np = self._np
         loop = asyncio.get_running_loop()
         audio = pyaudio.PyAudio()
         try:
             device = self._wasapi_loopback(audio)
             channels = int(device["maxInputChannels"])
             rate = int(device["defaultSampleRate"])
-            self._configure(rate)
+            self._configure(rate, channels=channels)
             heard = False
 
             def deliver(pcm: bytes) -> None:
@@ -276,11 +305,8 @@ class MusicSource(_Published):
                 self.feed(pcm)
 
             def on_audio(data: bytes, _frames: int, _time: Any, _status: int) -> tuple[None, int]:
-                samples = np.frombuffer(data, dtype="<i2")
-                if channels > 1:
-                    samples = samples.reshape(-1, channels).mean(axis=1).astype("<i2")
                 with contextlib.suppress(RuntimeError):  # the loop is gone while shutting down
-                    loop.call_soon_threadsafe(deliver, samples.tobytes())
+                    loop.call_soon_threadsafe(deliver, data)
                 return None, pyaudio.paContinue
 
             # Callback mode: a loopback stream delivers nothing while nothing plays, and a blocking read would hang.
@@ -299,7 +325,7 @@ class MusicSource(_Published):
                     await asyncio.sleep(_STREAM_POLL)
                     if not heard:
                         # Nothing has a stream open on the output, so no callback tells us it went quiet.
-                        self.feed(bytes(self._block * 2))
+                        self.feed(bytes(self._size))
                     heard = False
                 raise SmartBulbError("sound capture stopped unexpectedly")
             finally:
@@ -331,6 +357,7 @@ class MusicSource(_Published):
                 "the soundcard capture backend needs the soundcard package (pip install soundcard)"
             ) from None
         np = self._np
+        self._configure(self._rate, self._block, channels=2)
         loop = asyncio.get_running_loop()
         finished: asyncio.Future[None] = loop.create_future()
         stopping = threading.Event()
@@ -350,10 +377,11 @@ class MusicSource(_Published):
             try:
                 name = str(soundcard.default_speaker().name) if self._device == DEFAULT_DEVICE else self._device
                 loopback = soundcard.get_microphone(id=name, include_loopback=True)
-                with loopback.recorder(samplerate=self._rate, channels=1, blocksize=self._block) as recorder:
+                with loopback.recorder(samplerate=self._rate, channels=2, blocksize=self._block) as recorder:
                     while not stopping.is_set():
                         frames = recorder.record(numframes=self._block)
-                        pcm = (np.clip(frames[:, 0], -1.0, 1.0) * 32767).astype("<i2").tobytes()
+                        pair = frames[:, :2] if frames.shape[1] > 1 else np.repeat(frames, 2, axis=1)
+                        pcm = (np.clip(pair, -1.0, 1.0) * 32767).astype("<i2").tobytes()
                         loop.call_soon_threadsafe(self.feed, pcm)
             except Exception as exc:
                 loop.call_soon_threadsafe(settle, exc)
@@ -368,12 +396,13 @@ class MusicSource(_Published):
             stopping.set()
 
     async def _capture_parec(self) -> None:
+        self._configure(self._rate, self._block, channels=2)
         command = [
             "parec",
             f"--device={self._device}",
             "--format=s16le",
             f"--rate={self._rate}",
-            "--channels=1",
+            "--channels=2",
             "--raw",
             "--latency-msec=20",
         ]
@@ -402,13 +431,27 @@ def _set_delay(source: AudioSource, delay: float) -> None:
     source.delay = delay
 
 
-def music_pulse(source: AudioSource, color: Color | None = None, decay: float = 5.0, delay: float = 0.0) -> Effect:
+def _loudness(levels: Levels) -> float:
+    return max(levels.bass, levels.mid, levels.treble)
+
+
+def music_pulse(
+    source: AudioSource,
+    color: Color | None = None,
+    decay: float = 5.0,
+    delay: float = 0.0,
+    sensitivity: float = DEFAULT_SENSITIVITY,
+) -> Effect:
     """Flash on every beat and glow with the bass in between.
 
     Without a ``color`` the hue steps to a new one on each beat. ``delay`` holds
-    the light back to line up with a late audio output.
+    the light back to line up with a late audio output. ``sensitivity`` (0..1)
+    sets how easily a rise in the bass counts as a beat.
     """
     _set_delay(source, delay)
+    if not 0.0 <= sensitivity <= 1.0:
+        raise ValueError("sensitivity must be within 0..1")
+    source.sensitivity = sensitivity
 
     def effect(t: float) -> Color:
         flash = math.exp(-decay * (source.clock() - source.last_beat))
@@ -436,5 +479,69 @@ def music_spectrum(source: AudioSource, release: float = 3.0, delay: float = 0.0
             shown[i] = max(target, shown[i] - fall)
         # squared for contrast: quiet bands stay dim
         return Color(*(round(255 * value * value) for value in shown))
+
+    return effect
+
+
+def music_volume(
+    source: AudioSource, color: Color = RED, release: float = 3.0, floor: float = 0.0, delay: float = 0.0
+) -> Effect:
+    """One colour whose brightness follows the loudness.
+
+    ``release`` is the fall rate per second; ``floor`` (0..1) is the brightness kept in silence.
+    """
+    _set_delay(source, delay)
+    if not 0.0 <= floor <= 1.0:
+        raise ValueError("floor must be within 0..1")
+    shown = 0.0
+    last = 0.0
+
+    def effect(t: float) -> Color:
+        nonlocal shown, last
+        shown = max(_loudness(source.levels), shown - release * max(0.0, t - last))
+        last = t
+        level = floor + (1.0 - floor) * shown * shown
+        return color.scaled(level) if level >= _DARK else OFF
+
+    return effect
+
+
+def music_stereo(
+    source: AudioSource,
+    left: Color = BLUE,
+    right: Color = RED,
+    width: float = 4.0,
+    release: float = 3.0,
+    delay: float = 0.0,
+) -> Effect:
+    """Blend between two colours by where the sound sits; brightness follows the loudness.
+
+    Sound on the left shows ``left``, on the right ``right``, and the middle is
+    an even mix. Music rarely leans far to one side, so ``width`` stretches the
+    measured position: at 4 a quarter of the way out already gives the pure colour.
+    """
+    _set_delay(source, delay)
+    if width <= 0.0:
+        raise ValueError("width must be positive")
+    shown = 0.0
+    position = 0.5
+    last = 0.0
+
+    def effect(t: float) -> Color:
+        nonlocal shown, position, last
+        step = max(0.0, t - last)
+        last = t
+        levels = source.levels
+        loudness = _loudness(levels)
+        faded = max(0.0, shown - release * step)
+        if loudness > 0.0:  # silence says nothing about the position, keep the last one
+            target = min(1.0, max(0.0, 0.5 + 0.5 * width * levels.balance))
+            if faded * faded < _DARK:
+                position = target  # out of the dark a sound starts where it is
+            else:
+                position += (target - position) * (1.0 - math.exp(-step / _PAN_SMOOTHING))
+        shown = max(loudness, faded)
+        level = shown * shown
+        return left.mix(right, position).scaled(level) if level >= _DARK else OFF
 
     return effect

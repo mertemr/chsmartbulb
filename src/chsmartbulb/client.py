@@ -131,16 +131,18 @@ async def _stream(target: Target, source: Capture) -> None:
     reader, writer = await connect(target)
     silent = False
 
-    def forward(levels: Levels, beat: bool) -> None:
+    def forward(levels: Levels, onset: float) -> None:
         nonlocal silent
         sent = [round(v, 3) for v in (levels.bass, levels.mid, levels.treble)]
-        quiet = not any(sent) and not beat
+        quiet = not any(sent)
         if quiet and silent:
             return  # nothing to say while nothing plays
         silent = quiet
         message: dict[str, Any] = {"cmd": "audio", "levels": sent}
-        if beat:
-            message["beat"] = True
+        if onset > 1.0:  # anything lower is never a beat
+            message["onset"] = round(onset, 2)
+        if balance := round(levels.balance, 2):
+            message["balance"] = balance
         writer.write(json.dumps(message).encode() + b"\n")
 
     source.on_block = forward

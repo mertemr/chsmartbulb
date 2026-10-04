@@ -63,7 +63,7 @@ def test_describe_is_plain_data_covering_every_effect():
     assert {entry["name"] for entry in listing} == set(catalog.CATALOG)
     breathe = next(entry for entry in listing if entry["name"] == "breathe")
     assert breathe["params"] == {"color": "#ff0000", "period": 4.0, "floor": 0.0}
-    assert [entry["name"] for entry in listing if entry["needs_audio"]] == ["music", "spectrum"]
+    assert [entry["name"] for entry in listing if entry["needs_audio"]] == ["music", "spectrum", "volume", "stereo"]
 
 
 def test_candle_flickers_within_its_depth_and_palette_blends():
@@ -102,8 +102,10 @@ def test_gain_holds_through_a_pause():
     source = music.MusicSource(clock=clock)
     feed(source, clock, tone(100, 1.0))
     feed(source, clock, silence(60.0))
+    beats = source.beats
     feed(source, clock, tone(100, 0.2, amplitude=0.005))
     assert 0 < source.levels.bass < 0.05  # still measured against the music before the pause
+    assert source.beats == beats  # and too faint to be a beat
 
 
 def test_beats_are_counted_once_per_kick():
@@ -113,6 +115,39 @@ def test_beats_are_counted_once_per_kick():
     feed(source, clock, kick * 6)
     assert source.beats == 6
     assert clock.now - source.last_beat == pytest.approx(0.5, abs=0.06)
+
+
+def test_sensitivity_decides_which_rises_are_beats():
+    def beats(sensitivity):
+        clock = Clock()
+        source = music.MusicSource(clock=clock)
+        source.sensitivity = sensitivity
+        feed(source, clock, tone(80, 1.0, amplitude=0.2))
+        accent = tone(80, 0.1, amplitude=0.5) + tone(80, 0.4, amplitude=0.2)  # 2.5 times the bass under it
+        feed(source, clock, accent * 4)
+        return source.beats
+
+    assert music.beat_ratio(music.DEFAULT_SENSITIVITY) == 1.5
+    assert beats(0.5) == 5
+    assert beats(0.0) == 1  # only the start out of silence is hard enough
+    assert beats(1.0) >= 5
+
+
+def test_balance_follows_the_louder_side():
+    source = music.MusicSource(channels=2, clock=Clock())
+    assert source.levels.balance == 0.0
+
+    def play(left, right):
+        t = np.arange(music.BLOCK) / music.RATE
+        wave = np.sin(2 * math.pi * 200 * t) * 32767
+        source.feed(np.stack([left * wave, right * wave], axis=1).astype("<i2").tobytes())
+        return source.levels
+
+    assert play(0.5, 0.0).balance == pytest.approx(-1.0)
+    assert play(0.2, 0.4).balance == pytest.approx(1 / 3, abs=0.01)
+    assert play(0.3, 0.3).balance == pytest.approx(0.0, abs=0.01)
+    assert play(0.3, 0.3).bass > 0.5  # the bands come from both sides together
+    assert play(0.0, 0.0) == music.Levels()
 
 
 def test_steady_bass_and_silence_produce_no_beats():
@@ -144,15 +179,15 @@ def test_remote_audio_applies_delay_and_clears():
     clock = Clock()
     remote = music.RemoteAudio(clock=clock)
     remote.delay = 0.2
-    remote.push(music.Levels(bass=1.0), True)
+    remote.push(music.Levels(bass=1.0), 8.0)
     assert (remote.levels, remote.beats) == (music.Levels(), 0)
     clock.now = 0.25
-    remote.push(music.Levels(), False)
+    remote.push(music.Levels(), 0.0)
     assert (remote.levels.bass, remote.beats, remote.last_beat) == (1.0, 1, 0.2)
     remote.clear()
     assert remote.levels == music.Levels()
     clock.now = 1.0
-    remote.push(music.Levels(mid=0.5), False)
+    remote.push(music.Levels(mid=0.5), 0.0)
     assert remote.levels == music.Levels()  # the block pushed before the clear is gone, this one is still held
 
 
@@ -161,9 +196,9 @@ def test_on_block_sees_every_block_before_any_delay():
     source = music.MusicSource(clock=clock)
     source.delay = 1.0
     seen = []
-    source.on_block = lambda levels, beat: seen.append((levels.bass > 0.9, beat))
+    source.on_block = lambda levels, onset: seen.append((levels.bass > 0.9, onset))
     feed(source, clock, tone(80, 0.1))
-    assert seen[0] == (True, True)
+    assert seen[0] == (True, 100.0)  # out of silence the rise is as strong as it gets
     assert len(seen) == 4  # 0.1 s is four full blocks
     assert source.beats == 0  # the source's own view is still held back
 
@@ -247,11 +282,12 @@ def test_wasapi_capture_mixes_down_and_analyses_at_the_device_rate(monkeypatch):
 
         t = np.arange(1024 * 8) / 48000
         left = (0.5 * np.sin(2 * math.pi * 100 * t) * 32767).astype("<i2")
-        stereo = np.stack([left, left], axis=1).tobytes()
+        stereo = np.stack([left, left // 2], axis=1).tobytes()
         assert portaudio.callback(stereo, 1024 * 8, None, 0) == (None, 0)
         await asyncio.sleep(0.01)
         assert source.levels.bass > 0.9
         assert source.levels.treble < 0.1
+        assert source.levels.balance == pytest.approx(-1 / 3, abs=0.01)
 
         await source.stop()
         assert (portaudio.stream.active, portaudio.stream.closed, portaudio.terminated) == (False, True, True)
@@ -397,6 +433,50 @@ def test_music_pulse_flashes_on_a_beat_and_changes_hue():
     assert pulse(1.0) != first  # new hue
     fixed = music.music_pulse(source, Color(b=255))
     assert fixed(1.0) == Color(b=255)
+
+
+def test_sensitivity_is_set_through_the_effect_parameters():
+    source = FakeMusic()
+    catalog.create("music", {"sensitivity": 0.2}, audio=source)
+    assert source.sensitivity == 0.2
+    catalog.create("music", {}, audio=source)
+    assert source.sensitivity == 0.5
+    with pytest.raises(ValueError, match="sensitivity"):
+        catalog.create("music", {"sensitivity": 2}, audio=source)
+
+
+def test_music_volume_shows_one_colour_as_bright_as_the_sound():
+    source = FakeMusic()
+    volume = catalog.create("volume", {"color": "0000ff", "release": 2.0}, audio=source)
+    assert volume(0.0) == Color()
+    source.levels = music.Levels(mid=1.0)
+    assert volume(0.1) == Color(b=255)
+    source.levels = music.Levels()
+    assert volume(0.35) == Color(b=64)  # fell from 1.0 to 0.5, squared
+    assert volume(2.0) == Color()
+    glow = catalog.create("volume", {"color": "0000ff", "floor": 0.2}, audio=source)
+    assert glow(0.0) == Color(b=51)  # never darker than the floor
+    with pytest.raises(ValueError, match="floor"):
+        catalog.create("volume", {"floor": 2}, audio=source)
+
+
+def test_music_stereo_blends_two_colours_by_position():
+    source = FakeMusic()
+    stereo = catalog.create("stereo", {"left": "00ff00", "right": "ff0000", "width": 2}, audio=source)
+    assert stereo(0.0) == Color()  # silent
+    source.levels = music.Levels(bass=1.0)
+    assert stereo(1.0) == Color(r=128, g=128)  # centred: an even mix
+    source.levels = music.Levels(bass=1.0, balance=-0.5)
+    assert stereo(1.05).g > stereo(1.05).r > 0  # on its way to the left colour
+    assert stereo(3.0) == Color(g=255)  # half way out is all the way with width 2
+    source.levels = music.Levels(bass=1.0, balance=0.25)
+    assert stereo(5.0) == Color(r=191, g=64)
+    source.levels = music.Levels()
+    assert stereo(5.2) == Color(r=31, g=10)  # faded to 0.4 squared, and the position holds in silence
+    source.levels = music.Levels(bass=1.0, balance=-0.5)
+    assert stereo(9.0) == Color(g=255)  # out of the dark a sound shows where it is at once
+    with pytest.raises(ValueError, match="width"):
+        catalog.create("stereo", {"width": 0}, audio=source)
 
 
 def test_music_spectrum_maps_bands_to_channels_and_releases_slowly():

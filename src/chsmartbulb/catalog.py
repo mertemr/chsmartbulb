@@ -44,7 +44,7 @@ _ENTRIES = [
         "music",
         "flash on the beat of the computer's audio",
         music.music_pulse,
-        {"color": None, "decay": 5.0, "delay": 0.0},
+        {"color": None, "decay": 5.0, "delay": 0.0, "sensitivity": music.DEFAULT_SENSITIVITY},
         needs_audio=True,
     ),
     EffectInfo(
@@ -52,6 +52,20 @@ _ENTRIES = [
         "bass, mids, treble as red, green, blue",
         music.music_spectrum,
         {"release": 3.0, "delay": 0.0},
+        needs_audio=True,
+    ),
+    EffectInfo(
+        "volume",
+        "one colour, as bright as the audio is loud",
+        music.music_volume,
+        {"color": RED, "release": 3.0, "floor": 0.0, "delay": 0.0},
+        needs_audio=True,
+    ),
+    EffectInfo(
+        "stereo",
+        "blend two colours by where the sound sits between left and right",
+        music.music_stereo,
+        {"left": BLUE, "right": RED, "width": 4.0, "release": 3.0, "delay": 0.0},
         needs_audio=True,
     ),
 ]
@@ -64,8 +78,8 @@ def _as_color(value: Any) -> Color:
 
 
 def _coerce(key: str, default: Any, value: Any) -> Any:
-    if key == "color":
-        return None if value is None else _as_color(value)
+    if key == "color" or isinstance(default, Color):
+        return None if value is None and default is None else _as_color(value)
     if key == "colors":
         items = value.split(",") if isinstance(value, str) else value
         colors = tuple(_as_color(item) for item in items)

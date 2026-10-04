@@ -14,6 +14,7 @@ import functools
 import hmac
 import json
 import logging
+import math
 import os
 import signal
 import tempfile
@@ -289,9 +290,12 @@ class BulbService:
     def _push_audio(self, request: Mapping[str, Any]) -> None:
         try:
             bass, mid, treble = (min(1.0, max(0.0, float(value))) for value in request["levels"])
+            balance = min(1.0, max(-1.0, float(request.get("balance", 0.0))))
+            # agents from before the sensitivity setting decided on the beat themselves
+            onset = float(request["onset"]) if "onset" in request else math.inf if request.get("beat") else 0.0
         except (KeyError, TypeError, ValueError):
             return  # a malformed block is not worth a reply at forty a second
-        self._remote.push(Levels(bass, mid, treble), bool(request.get("beat")))
+        self._remote.push(Levels(bass, mid, treble, balance), onset)
 
     async def _stop_effect(self) -> None:
         task, self._effect_task = self._effect_task, None
