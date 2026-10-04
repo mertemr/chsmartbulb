@@ -69,6 +69,45 @@ def test_bad_requests_are_reported_not_raised():
     run(scenario())
 
 
+def test_rejected_effect_leaves_the_plan_and_the_capture_untouched():
+    async def scenario():
+        FakeMusic.created.clear()
+        daemon = await attached(FakeBulbTransport())
+        await daemon.handle({"cmd": "color", "color": "#0000ff"})
+        reply = await daemon.handle({"cmd": "effect", "name": "music", "params": {"delay": 9}})
+        assert "delay" in reply["error"]
+        status = await daemon.handle({"cmd": "status"})
+        assert (status["effect"], status["playing"], status["color"]) == (None, False, "#0000ff")
+        assert not any(source.running for source in FakeMusic.created)
+        await daemon.close()
+
+    run(scenario())
+
+
+def test_state_file_with_a_bad_effect_is_ignored(tmp_path):
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps({"on": True, "color": "#102030", "brightness": 1.0, "effect": {"name": "disco", "params": {}}})
+    )
+
+    async def scenario():
+        transport = FakeBulbTransport()
+        transport.channels = [0, 0, 0, 255, 0]
+        daemon = service.BulbService(ChSmartBulb(transport, auto_reconnect=False), state_path=state_path)
+        await daemon.start()
+        await until(lambda: bool(transport.opened))
+        await asyncio.sleep(0.02)
+        status = await daemon.handle({"cmd": "status"})
+        assert (status["connected"], status["color"], status["effect"]) == (
+            True,
+            "#000000ff",
+            None,
+        )  # took over the bulb
+        await daemon.close()
+
+    run(scenario())
+
+
 def test_effect_runs_in_the_background_and_stop_returns_to_the_plain_colour():
     async def scenario():
         transport = FakeBulbTransport()

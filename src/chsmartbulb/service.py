@@ -172,10 +172,13 @@ class BulbService:
         if self._state_path is None or not self._state_path.exists():
             return
         try:
-            self._plan = Plan.from_json(json.loads(self._state_path.read_text()))
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            log.warning("ignoring unreadable state file %s: %s", self._state_path, exc)
+            plan = Plan.from_json(json.loads(self._state_path.read_text()))
+            if plan.effect is not None:
+                self._check_effect(plan.effect["name"], plan.effect.get("params") or {})
+        except (OSError, ValueError, KeyError, TypeError, SmartBulbError) as exc:
+            log.warning("ignoring unusable state file %s: %s", self._state_path, exc)
             return
+        self._plan = plan
         self._adopt_on_connect = False
 
     def _save(self) -> None:
@@ -243,6 +246,12 @@ class BulbService:
             await self._bulb.set_color(self._plan.color)
         except _LINK_ERRORS as exc:
             await self._link_lost(exc)
+
+    def _check_effect(self, name: str, params: Mapping[str, Any]) -> None:
+        """Build the effect once, so a bad request fails before it reaches the plan."""
+        catalog.resolve(name, params)
+        audio = self._music_factory() if catalog.CATALOG[name].needs_audio else None
+        catalog.create(name, params, audio=audio)
 
     async def _stop_effect(self) -> None:
         task, self._effect_task = self._effect_task, None
@@ -329,9 +338,7 @@ class BulbService:
 
     async def _effect(self, request: Mapping[str, Any]) -> dict[str, Any]:
         name, params = request["name"], dict(request.get("params") or {})
-        catalog.resolve(name, params)
-        if catalog.CATALOG[name].needs_audio:
-            self._music_factory()  # fail now, not inside the effect task, if capture is impossible
+        self._check_effect(name, params)
         self._take_brightness(request)
         plan = self._plan
         plan.effect = {"name": name, "params": params}
