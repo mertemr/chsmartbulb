@@ -41,6 +41,7 @@ turned out wrong. Scripts are in [`research/`](../research), raw output in
 | 19 | Do the sound-reactive effects and their delay work? | Beat played into a null sink, light read back | Follows the beat; first light moves by the configured delay | |
 | 20 | Can another machine drive the effects? | Service on TCP, agent feeding analysis from a null sink | Light follows the agent's feed with either capture backend | |
 | 21 | Does the agent work from Windows? | Agent on a Windows desktop capturing its output through WASAPI loopback, light read back on the service | Light follows the music playing on the desktop | |
+| 22 | Do the stereo position and the beat sensitivity work on captured audio? | Panned test signal into a null sink, analysis and effect output printed | Position measured as played; sensitivity 0 dropped the soft accents, 1 kept them all | |
 
 ## Wrong turns
 

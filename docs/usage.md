@@ -113,8 +113,9 @@ Commands: `status`, `on`, `off`, `color`, `brightness`, `effect`, `native`, `sto
 `info`, `timers`, `timer`, `raw`.
 
 A network connection must start with `{"cmd": "auth", "token": "..."}`. An agent then sends
-`{"cmd": "audio", "levels": [bass, mid, treble], "beat": true}` for each analysed block; those are
-not answered.
+`{"cmd": "audio", "levels": [bass, mid, treble], "onset": 2.4, "balance": -0.2}` for each analysed
+block; those are not answered. `onset` is how far the bass stands above its recent average and
+`balance` runs from -1 (left) to 1 (right); both are left out when there is nothing to report.
 
 ## Effects
 
@@ -129,8 +130,10 @@ not answered.
 | `candle` | Uneven flicker | `color`, `depth` |
 | `palette` | Drift through a list of colours | `colors`, `hold`, `fade_in` |
 | `police` | Alternate red and blue | `period` |
-| `music` | Flash on the beat | `color`, `decay`, `delay` |
+| `music` | Flash on the beat | `color`, `decay`, `sensitivity`, `delay` |
 | `spectrum` | Bass, mids and treble as red, green and blue | `release`, `delay` |
+| `volume` | One colour, as bright as the sound is loud | `color`, `release`, `floor`, `delay` |
+| `stereo` | Blend two colours by where the sound sits | `left`, `right`, `width`, `release`, `delay` |
 
 ```bash
 chsmartbulb effect breathe -c 00ff00 -p 3
@@ -140,10 +143,29 @@ chsmartbulb effect music -b 60
 
 ### Sound-reactive effects
 
-`music` and `spectrum` analyse the audio on the computer, taken from the monitor of the default
-output. It does not matter where the sound plays: laptop speakers, headphones, another Bluetooth
-device or the bulb itself. They need the `audio` extra (numpy) and the `parec` tool that comes
-with PulseAudio and PipeWire.
+`music`, `spectrum`, `volume` and `stereo` analyse the audio on the computer, taken from the
+monitor of the default output. It does not matter where the sound plays: laptop speakers,
+headphones, another Bluetooth device or the bulb itself. They need the `audio` extra (numpy) and
+the `parec` tool that comes with PulseAudio and PipeWire.
+
+`music` changes hue on every beat unless it is given a colour. `sensitivity` (0 to 1, default 0.5)
+sets how easily a rise in the bass counts as a beat: lower it when the light flashes on more than
+the beat, raise it for quiet or bass-light music.
+
+```bash
+chsmartbulb effect music -c ff0080 -s sensitivity=0.3
+```
+
+`volume` ignores beats and follows the loudness in a single colour; `floor` keeps some light in
+the quiet parts.
+
+`stereo` shows `left` when the sound is on the left, `right` when it is on the right and a mix in
+between. Most music sits close to the middle, so `width` stretches the measured position; raise it
+if the colour barely moves, lower it if it only ever shows the two ends.
+
+```bash
+chsmartbulb effect stereo -s left=00ffff -s right=ff00ff -s width=6
+```
 
 `--audio-device SOURCE` picks a different source, for example the monitor of one particular
 output (`pactl list short sources` shows the names).
