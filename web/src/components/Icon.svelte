@@ -7,6 +7,8 @@
     stop: 'M7 7h10v10H7Z',
     plus: 'M12 5v14 M5 12h14',
     close: 'M6 6l12 12 M18 6L6 18',
+    up: 'M6 15l6-6 6 6',
+    down: 'M6 9l6 6 6-6',
   }
 
   let { name, class: classes = 'size-5' }: { name: keyof typeof PATHS; class?: string } = $props()

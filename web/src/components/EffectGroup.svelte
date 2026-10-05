@@ -15,10 +15,31 @@
   const info = $derived(effects.find((effect) => effect.name === active) ?? null)
   const values = new Draft<Params>(() => ({ ...info?.params, ...app.state?.effect?.params }))
   const changed = $derived(
-    !!info && Object.keys(info.params).some((key) => String(values.value[key]) !== String(info.params[key])),
+    !!info &&
+      Object.keys(info.params).some((key) => JSON.stringify(values.value[key]) !== JSON.stringify(info.params[key])),
   )
 
-  const settings = new Map<string, Params>() // what each effect was last set to, for coming back to it
+  // what each effect was last set to, for coming back to it; kept by the browser, so a
+  // custom effect survives a visit to another one
+  const SETTINGS_KEY = 'chsmartbulb.effects'
+  const settings = new Map<string, Params>(recalled())
+
+  function recalled(): [string, Params][] {
+    try {
+      return Object.entries(JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}'))
+    } catch {
+      return []
+    }
+  }
+
+  function keep(name: string, params: Params) {
+    settings.set(name, params)
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...Object.fromEntries(recalled()), [name]: params }))
+    } catch {
+      // private browsing: remembered for this visit only
+    }
+  }
   const push = latest((request: { name: string; params: Params }) => app.send({ cmd: 'effect', ...request }))
 
   function start(effect: EffectInfo) {
@@ -28,7 +49,7 @@
   function apply(next: Params) {
     if (!info) return
     values.set(next)
-    settings.set(info.name, next)
+    keep(info.name, next)
     push({ name: info.name, params: next })
   }
 </script>

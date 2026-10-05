@@ -2,7 +2,10 @@
 // Requests carry an `id` that the reply repeats; `{"event": "state"}` messages
 // arrive on their own whenever anything changes the light.
 
-export type Value = number | string | string[] | null
+/** One colour of a custom effect: blend into it over `fade` seconds, shaped by `ease`, then hold it. */
+export type Step = { color: string; hold: number; fade: number; ease: string }
+
+export type Value = number | string | string[] | Step[] | null
 
 export type State = {
   connected: boolean
@@ -24,6 +27,7 @@ export type ParamSchema =
   | { type: 'number'; min: number; max: number; step: number }
   | { type: 'color'; optional: boolean }
   | { type: 'colors' }
+  | { type: 'steps'; most: number; easings: string[] }
 
 export type EffectInfo = {
   name: string

@@ -1,8 +1,9 @@
 <script lang="ts">
-  import type { ParamSchema, Value } from '../lib/api'
+  import type { ParamSchema, Step, Value } from '../lib/api'
   import { rgbOnly } from '../lib/color'
   import Icon from './Icon.svelte'
   import Slider from './Slider.svelte'
+  import StepsField from './StepsField.svelte'
 
   type Props = { name: string; schema: ParamSchema; value: Value; onchange: (value: Value) => void }
 
@@ -12,7 +13,7 @@
   let { name, schema, value, onchange }: Props = $props()
   const id = $props.id()
   const label = $derived(name.charAt(0).toUpperCase() + name.slice(1).replaceAll('_', ' '))
-  const list = $derived(Array.isArray(value) ? value : [])
+  const list = $derived(Array.isArray(value) ? value.filter((item) => typeof item === 'string') : [])
 
   function decimals(step: number): number {
     return (String(step).split('.')[1] ?? '').length
@@ -58,6 +59,8 @@
       />
     </div>
   </div>
+{:else if schema.type === 'steps'}
+  <StepsField {schema} steps={Array.isArray(value) ? (value as Step[]) : []} {onchange} />
 {:else}
   <fieldset>
     <legend class="text-sm font-medium">{label}</legend>
