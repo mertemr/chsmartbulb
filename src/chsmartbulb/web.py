@@ -209,7 +209,10 @@ class Site:
     async def _head(reader: asyncio.StreamReader) -> bytes:
         first = await reader.read(1)
         if first == b"{":
-            # a client of the socket protocol on the wrong port: say so now, it will not send more
+            # a client of the socket protocol on the wrong port: say so now, it will not send more.
+            # Its line is read first: closing with it unread would reset the connection and lose the answer.
+            with contextlib.suppress(ValueError):
+                await reader.readline()
             raise asyncio.IncompleteReadError(first, None)
         return first + await reader.readuntil(b"\r\n\r\n")
 

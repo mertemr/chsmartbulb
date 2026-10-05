@@ -65,7 +65,10 @@ async def _exchange(
         raise SmartBulbError("the service closed the connection without answering")
     if line.startswith(b"HTTP/"):
         raise ConnectionFailed("that port is the web interface; use the one given to --listen (usually 8377)")
-    return json.loads(line)
+    try:
+        return json.loads(line)
+    except ValueError:
+        raise ConnectionFailed("whatever answered is not a chsmartbulb service") from None
 
 
 async def connect(target: Target, *, wait: float = 15.0) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:

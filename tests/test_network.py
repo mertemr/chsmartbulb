@@ -254,3 +254,19 @@ def test_platforms_without_unix_sockets_or_getuid_still_work(monkeypatch, tmp_pa
             await client.call(tmp_path / "bulb.sock", {"cmd": "status"})
 
     run(scenario())
+
+
+def test_something_else_on_the_port_is_reported_not_raised():
+    async def stranger(reader, writer):
+        await reader.readline()
+        writer.write(b"220 mail ready\r\n")
+        writer.close()
+
+    async def scenario():
+        server = await asyncio.start_server(stranger, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        with pytest.raises(ConnectionFailed, match="not a chsmartbulb service"):
+            await client.call(client.Remote("127.0.0.1", port, TOKEN), {"cmd": "status"})
+        server.close()
+
+    run(scenario())
