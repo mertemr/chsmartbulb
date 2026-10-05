@@ -88,7 +88,9 @@ chsmartbulb daemon --web 8378
 ```
 
 Open `http://laptop.local:8378` and enter the token once; the browser keeps it. Every open page
-follows the light live, whoever changed it, the command line included. The same warning applies
+follows the light live, whoever changed it, the command line included. While the bulb is out
+of reach the page says why, shows what the bulb will be given when it returns, and offers to try
+again at once. The same warning applies
 as for `--listen`: nothing is encrypted, so keep it to a network you trust. `--web 127.0.0.1:8378`
 limits it to the machine itself.
 
@@ -160,13 +162,17 @@ One JSON object per line in each direction. Replies carry `"ok"` and, on failure
 ```
 
 Commands: `status`, `on`, `off`, `color`, `brightness`, `effect`, `native`, `stop`, `effects`,
-`info`, `timers`, `timer`, `raw`, `subscribe`.
+`info`, `timers`, `timer`, `raw`, `subscribe`, `reconnect`.
 
 A request may carry an `"id"` of its own choosing, which the reply repeats. After
 `{"cmd": "subscribe"}`, whose reply holds the current state, the service sends
-`{"event": "state", "connected": ..., "playing": ..., "on": ..., "color": ..., "brightness": ...,
-"effect": ..., "native": ..., "audio": ..., "screen": ...}` whenever any of it changes. A client
-that falls behind gets the latest state, not a backlog.
+`{"event": "state", "connected": ..., "link": ..., "problem": ..., "playing": ..., "on": ...,
+"color": ..., "brightness": ..., "effect": ..., "native": ..., "audio": ..., "screen": ...}`
+whenever any of it changes. A client that falls behind gets the latest state, not a backlog.
+
+`link` is `connected`, `connecting` or `waiting` (between attempts), and `problem` is why the
+last attempt failed. While the bulb is away the rest of the state is what it will be given when
+it returns. `reconnect` makes the service try at once instead of waiting out its retry delay.
 
 `effects` lists each effect with its default `params` and a `schema` per parameter
 (`{"type": "number", "min", "max", "step"}`, `{"type": "color", "optional"}` or
