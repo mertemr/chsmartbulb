@@ -1,0 +1,132 @@
+<script lang="ts">
+  import ColorPanel from './components/ColorPanel.svelte'
+  import DevicePanel from './components/DevicePanel.svelte'
+  import EffectsPanel from './components/EffectsPanel.svelte'
+  import Icon from './components/Icon.svelte'
+  import Login from './components/Login.svelte'
+  import Slider from './components/Slider.svelte'
+  import { app, Draft } from './lib/app.svelte'
+  import { cssColor } from './lib/color'
+  import { latest } from './lib/latest'
+
+  const TABS = [
+    { id: 'colour', label: 'Colour' },
+    { id: 'effects', label: 'Effects' },
+    { id: 'device', label: 'Device' },
+  ] as const
+  const CARD = 'bg-card border-line rounded-2xl border p-4 sm:p-5'
+
+  let tab = $state<(typeof TABS)[number]['id']>('colour')
+
+  const on = $derived(!!app.state?.on)
+  const glow = $derived(cssColor(app.state?.color ?? '#000000ff'))
+  const brightness = new Draft(() => Math.round((app.state?.brightness ?? 1) * 100))
+  const pushBrightness = latest((percent: number) => app.send({ cmd: 'brightness', level: percent / 100 }))
+
+  const summary = $derived.by(() => {
+    const state = app.state
+    if (app.link !== 'online' || !state) return 'Reconnecting…'
+    if (!state.connected) return 'Bulb out of reach'
+    if (!state.on) return 'Off'
+    if (state.effect) return `Effect: ${state.effect.name}`
+    if (state.native) return `Built-in: ${state.native.name}`
+    return `On · ${Math.round(state.brightness * 100)}%`
+  })
+  const healthy = $derived(app.link === 'online' && !!app.state?.connected)
+
+  function dim(percent: number) {
+    brightness.set(percent)
+    pushBrightness(percent)
+  }
+</script>
+
+{#if app.link === 'signed-out'}
+  <Login />
+{:else if !app.state}
+  <main class="grid min-h-dvh place-content-center gap-4 px-6 text-center">
+    <p class="text-muted">Connecting to the service…</p>
+    <button type="button" class="text-accent text-sm font-medium underline" onclick={() => app.logout()}>
+      Use a different token
+    </button>
+  </main>
+{:else}
+  <div class="mx-auto max-w-5xl px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-28 lg:pb-10">
+    <header class="flex items-center justify-between gap-4 py-2">
+      <div class="min-w-0">
+        <h1 class="text-2xl font-semibold tracking-tight">Bulb</h1>
+        <p class="text-muted flex items-center gap-2 text-sm" role="status">
+          <span class={['size-2 shrink-0 rounded-full', healthy ? 'bg-ok' : 'bg-danger']}></span>
+          <span class="truncate">{summary}</span>
+        </p>
+      </div>
+      <button
+        type="button"
+        class={[
+          'border-line grid size-16 shrink-0 place-items-center rounded-full border transition active:scale-95',
+          on ? 'text-ink' : 'bg-card text-muted',
+        ]}
+        style:background={on ? `color-mix(in srgb, ${glow} 30%, var(--color-card))` : undefined}
+        style:box-shadow={on ? `0 0 2.5rem -0.5rem ${glow}` : undefined}
+        aria-pressed={on}
+        aria-label={on ? 'Turn the light off' : 'Turn the light on'}
+        disabled={app.link !== 'online'}
+        onclick={() => app.send({ cmd: on ? 'off' : 'on', fade: true })}
+      >
+        <Icon name="power" class="size-7" />
+      </button>
+    </header>
+
+    {#if app.link === 'online' && !app.state.connected}
+      <p class="bg-raised mt-2 rounded-xl px-4 py-3 text-sm" role="status">
+        The bulb is out of reach. Changes are kept and applied when it comes back.
+      </p>
+    {/if}
+
+    <main class="mt-4 grid gap-4 lg:grid-cols-2 lg:items-start" inert={app.link !== 'online'}>
+      <div class="grid gap-4">
+        <section class={CARD}>
+          <Slider
+            label="Brightness"
+            value={brightness.value}
+            min={1}
+            max={100}
+            shown="{brightness.value}%"
+            track="linear-gradient(to right, color-mix(in srgb, {glow} 15%, var(--color-raised)), {glow})"
+            oninput={dim}
+          />
+        </section>
+        <section class={[CARD, tab !== 'colour' && 'hidden lg:block']}><ColorPanel /></section>
+        <section class={[CARD, tab !== 'device' && 'hidden lg:block']}><DevicePanel /></section>
+      </div>
+      <section class={[CARD, tab !== 'effects' && 'hidden lg:block']}><EffectsPanel /></section>
+    </main>
+  </div>
+
+  <nav
+    class="bg-card/90 border-line fixed inset-x-0 bottom-0 border-t pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden"
+    aria-label="Sections"
+  >
+    <div class="mx-auto grid max-w-md grid-cols-3">
+      {#each TABS as item (item.id)}
+        <button
+          type="button"
+          class={['grid h-16 place-items-center content-center gap-1 text-xs font-medium', tab === item.id ? 'text-accent' : 'text-muted']}
+          aria-current={tab === item.id ? 'page' : undefined}
+          onclick={() => (tab = item.id)}
+        >
+          <Icon name={item.id} class="size-6" />
+          {item.label}
+        </button>
+      {/each}
+    </div>
+  </nav>
+
+  {#if app.error}
+    <p
+      class="bg-ink text-page fixed inset-x-4 bottom-20 z-10 mx-auto max-w-sm rounded-xl px-4 py-3 text-center text-sm shadow-lg lg:bottom-6"
+      role="alert"
+    >
+      {app.error}
+    </p>
+  {/if}
+{/if}

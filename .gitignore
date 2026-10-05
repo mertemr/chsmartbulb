@@ -10,3 +10,6 @@ build/
 # camera calibration written by research/calib.py
 research/roi.npy
 research/cam.json
+
+# the web interface's toolchain; its built bundle in src/chsmartbulb/webui is tracked
+web/node_modules/
