@@ -133,6 +133,9 @@ class BulbService:
         self._effect_task: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()  # one request changes the plan at a time
         self._supervisor: asyncio.Task[None] | None = None
+        self._connecting = False
+        self._problem: str | None = None  # why the last attempt to connect failed
+        self._retry_now = asyncio.Event()
         self.tcp_address: tuple[str, int] | None = None
         self.web_address: tuple[str, int] | None = None
         self._commands: dict[str, Callable[[Mapping[str, Any]], Awaitable[dict[str, Any]]]] = {
@@ -144,6 +147,7 @@ class BulbService:
             "effect": self._effect,
             "native": self._native,
             "stop": self._stop,
+            "reconnect": self._reconnect,
             "effects": self._effects,
             "info": self._info,
             "timers": self._timers,
@@ -189,14 +193,27 @@ class BulbService:
             if self._bulb.is_connected:
                 await asyncio.sleep(self._poll_interval)
                 continue
+            self._connecting = True
+            self._notify()
             try:
                 await self._bulb.connect()
             except SmartBulbError as exc:
                 log.info("bulb unavailable: %s", exc)
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, _MAX_RETRY_DELAY)
+                self._problem = str(exc)
+                self._connecting = False
+                self._notify()
+                self._retry_now.clear()
+                try:
+                    await asyncio.wait_for(self._retry_now.wait(), delay)
+                except asyncio.TimeoutError:
+                    delay = min(delay * 2, _MAX_RETRY_DELAY)
+                else:
+                    delay = self._retry_delay  # someone asked: they expect the bulb to be back
                 continue
+            finally:
+                self._connecting = False
             log.info("connected to the bulb")
+            self._problem = None
             delay = self._retry_delay
             if self._adopt_on_connect:
                 self._adopt()
@@ -270,8 +287,11 @@ class BulbService:
         return functools.partial(self._listeners.discard, listener)
 
     def _state(self) -> dict[str, Any]:
+        connected = self._bulb.is_connected
         return {
-            "connected": self._bulb.is_connected,
+            "connected": connected,
+            "link": "connected" if connected else "connecting" if self._connecting else "waiting",
+            "problem": None if connected else self._problem,
             "playing": self._playing,
             **{kind: "agent" if feed.agents else "local" for kind, feed in self._feeds.items()},
             **self._plan.to_json(),
@@ -493,6 +513,11 @@ class BulbService:
     async def _stop(self, request: Mapping[str, Any]) -> dict[str, Any]:
         self._plan.effect = self._plan.native = None
         await self._commit()
+        return {}
+
+    async def _reconnect(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        """Try the bulb now instead of waiting out the retry delay."""
+        self._retry_now.set()
         return {}
 
     async def _effects(self, request: Mapping[str, Any]) -> dict[str, Any]:

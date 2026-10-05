@@ -101,7 +101,8 @@ def _print_timer(timer: dict[str, Any]) -> None:
 
 def _print(command: str, reply: dict[str, Any]) -> None:
     if command == "status":
-        print(f"bulb:       {'connected' if reply['connected'] else 'not connected'}")
+        reason = f" ({reply['problem']})" if reply.get("problem") else ""
+        print(f"bulb:       {'connected' if reply['connected'] else 'not connected' + reason}")
         print(f"audio:      {reply['audio']}")
         if "screen" in reply:
             print(f"screen:     {reply['screen']}")

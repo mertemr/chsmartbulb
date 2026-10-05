@@ -320,3 +320,25 @@ def test_state_is_written_once_after_a_burst_of_changes(tmp_path):
         await daemon.close()
 
     run(scenario())
+
+
+def test_state_says_why_the_bulb_is_away_and_a_request_can_retry_at_once():
+    async def scenario():
+        transport = FakeBulbTransport()
+        transport.fail_open = True
+        daemon = service.BulbService(ChSmartBulb(transport, auto_reconnect=False), retry_delay=30.0)
+        heard = []
+        daemon.subscribe(heard.append)
+        await daemon.start()
+        await until(lambda: bool(heard) and heard[-1]["link"] == "waiting")
+        assert heard[0]["link"] == "connecting"
+        status = await daemon.handle({"cmd": "status"})
+        assert (status["connected"], status["link"], status["problem"]) == (False, "waiting", "fake: host is down")
+
+        transport.fail_open = False  # back in range, long before the next attempt is due
+        assert (await daemon.handle({"cmd": "reconnect"}))["ok"]
+        await until(lambda: heard[-1]["link"] == "connected")
+        assert (heard[-1]["connected"], heard[-1]["problem"]) == (True, None)
+        await daemon.close()
+
+    run(scenario())
