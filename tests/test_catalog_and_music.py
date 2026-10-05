@@ -503,3 +503,16 @@ def test_missing_numpy_is_reported_clearly(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", no_numpy)
     with pytest.raises(SmartBulbError, match="numpy"):
         music.MusicSource()
+
+
+def test_every_parameter_has_a_schema_that_admits_its_default():
+    for info in catalog.describe():
+        assert set(info["schema"]) == set(info["params"]), info["name"]
+        for key, schema in info["schema"].items():
+            default = info["params"][key]
+            if schema["type"] == "number":
+                assert schema["min"] <= default <= schema["max"], (info["name"], key)
+            elif schema["type"] == "color":
+                assert schema["optional"] == (default is None), (info["name"], key)
+            else:
+                assert schema == {"type": "colors"}

@@ -21,6 +21,29 @@ class EffectInfo:
     build: Callable[..., Effect]
     defaults: Mapping[str, Any]
     needs: str | None = None  # the input the effect follows: "audio" or "screen"
+    ranges: Mapping[str, tuple[float, float, float]] | None = None  # where a slider differs from _RANGES
+
+
+#: Slider limits a front end offers per parameter: lowest, highest, step. The builders
+#: still decide what is valid; these only keep a control within a useful span.
+_RANGES: dict[str, tuple[float, float, float]] = {
+    "period": (0.2, 60.0, 0.1),
+    "floor": (0.0, 1.0, 0.01),
+    "saturation": (0.0, 1.0, 0.01),
+    "decay": (0.5, 20.0, 0.5),
+    "hz": (0.5, 10.0, 0.5),
+    "duty": (0.05, 0.95, 0.05),
+    "depth": (0.0, 1.0, 0.01),
+    "hold": (0.0, 30.0, 0.5),
+    "fade_in": (0.0, 30.0, 0.5),
+    "delay": (0.0, music.MAX_DELAY, 0.01),
+    "sensitivity": (0.0, 1.0, 0.01),
+    "release": (0.5, 10.0, 0.5),
+    "width": (1.0, 10.0, 0.5),
+    "smoothing": (0.0, 2.0, 0.05),
+    "white": (0.0, 1.0, 0.01),
+    "balance": (0.0, 1.0, 0.01),
+}
 
 
 def _police(period: float) -> Effect:
@@ -74,6 +97,7 @@ _ENTRIES = [
         screen.screen_follow,
         {"smoothing": 0.2, "saturation": 1.5, "white": 1.0, "balance": 0.0},
         needs="screen",
+        ranges={"saturation": (0.0, 3.0, 0.1)},
     ),
 ]
 
@@ -140,13 +164,23 @@ def _plain(value: Any) -> Any:
     return value
 
 
+def _schema(info: EffectInfo, key: str, default: Any) -> dict[str, Any]:
+    if key == "colors":
+        return {"type": "colors"}
+    if key == "color" or isinstance(default, Color):
+        return {"type": "color", "optional": default is None}
+    low, high, step = (info.ranges or {}).get(key) or _RANGES[key]
+    return {"type": "number", "min": low, "max": high, "step": step}
+
+
 def describe() -> list[dict[str, Any]]:
-    """The catalog as plain data, for listings."""
+    """The catalog as plain data, for listings and for front ends that build their controls from it."""
     return [
         {
             "name": info.name,
             "summary": info.summary,
             "params": {key: _plain(value) for key, value in info.defaults.items()},
+            "schema": {key: _schema(info, key, value) for key, value in info.defaults.items()},
             "needs": info.needs,
         }
         for info in CATALOG.values()

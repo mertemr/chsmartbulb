@@ -48,7 +48,7 @@ _BEAT_FLOOR = 0.05  # a beat needs the bass above this fraction of its recent pe
 _ONSET_CAP = 100.0
 _PAN_SMOOTHING = 0.15  # seconds for the stereo position to settle
 _DARK = 1 / 255
-_MAX_DELAY = 2.0
+MAX_DELAY = 2.0
 _STREAM_POLL = 0.5  # seconds between checks that a callback-driven stream is still alive
 
 
@@ -426,8 +426,8 @@ class MusicSource(_Published):
 
 
 def _set_delay(source: AudioSource, delay: float) -> None:
-    if not 0.0 <= delay <= _MAX_DELAY:
-        raise ValueError(f"delay must be within 0..{_MAX_DELAY:g} seconds")
+    if not 0.0 <= delay <= MAX_DELAY:
+        raise ValueError(f"delay must be within 0..{MAX_DELAY:g} seconds")
     source.delay = delay
 
 
