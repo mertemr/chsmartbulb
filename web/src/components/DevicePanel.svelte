@@ -22,7 +22,7 @@
   })
 
   const rows = $derived([
-    ['Bulb', reachable ? 'connected' : 'not connected'],
+    ['Bulb', { connected: 'connected', connecting: 'connecting…', waiting: 'out of reach' }[app.state?.link ?? 'waiting']],
     ['Name', info?.name ?? '–'],
     ['Model', info?.model ?? '–'],
     ['Firmware', info?.version ?? '–'],
@@ -50,6 +50,9 @@
       </div>
     {/if}
   </dl>
+  {#if app.state?.problem}
+    <p class="text-muted text-sm break-words">Last attempt to connect: {app.state.problem}</p>
+  {/if}
   {#if problem && reachable}
     <p class="text-danger text-sm" role="alert">{problem}</p>
   {/if}

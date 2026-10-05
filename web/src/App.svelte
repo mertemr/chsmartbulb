@@ -23,16 +23,22 @@
   const brightness = new Draft(() => Math.round((app.state?.brightness ?? 1) * 100))
   const pushBrightness = latest((percent: number) => app.send({ cmd: 'brightness', level: percent / 100 }))
 
-  const summary = $derived.by(() => {
+  // what the light shows, or will show once the bulb is back
+  const showing = $derived.by(() => {
     const state = app.state
-    if (app.link !== 'online' || !state) return 'Reconnecting…'
-    if (!state.connected) return 'Bulb out of reach'
+    if (!state) return ''
     if (!state.on) return 'Off'
     if (state.effect) return `Effect: ${state.effect.name}`
     if (state.native) return `Built-in: ${state.native.name}`
     return `On · ${Math.round(state.brightness * 100)}%`
   })
-  const healthy = $derived(app.link === 'online' && !!app.state?.connected)
+  const link = $derived(app.link === 'online' ? (app.state?.link ?? 'waiting') : 'offline')
+  const summary = $derived(
+    { offline: 'Reconnecting to the service…', connecting: 'Connecting to the bulb…', waiting: 'Bulb out of reach' }[
+      link as string
+    ] ?? showing,
+  )
+  const lit = $derived(on && link === 'connected')
 
   function dim(percent: number) {
     brightness.set(percent)
@@ -55,7 +61,12 @@
       <div class="min-w-0">
         <h1 class="text-2xl font-semibold tracking-tight">Bulb</h1>
         <p class="text-muted flex items-center gap-2 text-sm" role="status">
-          <span class={['size-2 shrink-0 rounded-full', healthy ? 'bg-ok' : 'bg-danger']}></span>
+          <span
+            class={[
+              'size-2 shrink-0 rounded-full',
+              link === 'connected' ? 'bg-ok' : link === 'connecting' ? 'bg-accent animate-pulse' : 'bg-danger',
+            ]}
+          ></span>
           <span class="truncate">{summary}</span>
         </p>
       </div>
@@ -63,10 +74,11 @@
         type="button"
         class={[
           'border-line grid size-16 shrink-0 place-items-center rounded-full border transition active:scale-95',
-          on ? 'text-ink' : 'bg-card text-muted',
+          lit ? 'text-ink' : 'bg-card text-muted',
+          on && !lit && 'border-dashed',
         ]}
-        style:background={on ? `color-mix(in srgb, ${glow} 30%, var(--color-card))` : undefined}
-        style:box-shadow={on ? `0 0 2.5rem -0.5rem ${glow}` : undefined}
+        style:background={lit ? `color-mix(in srgb, ${glow} 30%, var(--color-card))` : undefined}
+        style:box-shadow={lit ? `0 0 2.5rem -0.5rem ${glow}` : undefined}
         aria-pressed={on}
         aria-label={on ? 'Turn the light off' : 'Turn the light on'}
         disabled={app.link !== 'online'}
@@ -76,10 +88,29 @@
       </button>
     </header>
 
-    {#if app.link === 'online' && !app.state.connected}
-      <p class="bg-raised mt-2 rounded-xl px-4 py-3 text-sm" role="status">
-        The bulb is out of reach. Changes are kept and applied when it comes back.
-      </p>
+    {#if link === 'connecting' || link === 'waiting'}
+      <section class="border-line bg-raised mt-2 grid gap-3 rounded-2xl border p-4 text-sm sm:grid-cols-[1fr_auto] sm:items-center">
+        <div class="grid gap-1">
+          <h2 class="font-semibold">
+            {link === 'connecting' ? 'Connecting to the bulb…' : 'The bulb is out of reach'}
+          </h2>
+          {#if app.state.problem}
+            <p class="text-muted break-words">Last attempt: {app.state.problem}</p>
+          {/if}
+          <p class="text-muted">
+            The service keeps trying. Anything set here is kept and applied when the bulb is back; it will
+            show: <span class="text-ink font-medium">{showing}</span>.
+          </p>
+        </div>
+        <button
+          type="button"
+          class="border-line bg-card h-11 rounded-xl border px-4 font-medium disabled:opacity-50"
+          disabled={link === 'connecting'}
+          onclick={() => app.send({ cmd: 'reconnect' })}
+        >
+          Try now
+        </button>
+      </section>
     {/if}
 
     <main class="mt-4 grid gap-4 lg:grid-cols-2 lg:items-start" inert={app.link !== 'online'}>

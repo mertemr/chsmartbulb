@@ -6,6 +6,8 @@ export type Value = number | string | string[] | null
 
 export type State = {
   connected: boolean
+  link: 'connected' | 'connecting' | 'waiting'
+  problem: string | null // why the service could not reach the bulb, while it cannot
   playing: boolean
   on: boolean
   color: string
