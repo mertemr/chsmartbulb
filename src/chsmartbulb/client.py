@@ -63,6 +63,8 @@ async def _exchange(
         raise SmartBulbError("the service did not answer in time") from None
     if not line:
         raise SmartBulbError("the service closed the connection without answering")
+    if line.startswith(b"HTTP/"):
+        raise ConnectionFailed("that port is the web interface; use the one given to --listen (usually 8377)")
     return json.loads(line)
 
 
@@ -85,6 +87,8 @@ async def connect(target: Target, *, wait: float = 15.0) -> tuple[asyncio.Stream
             raise
         if not reply.get("ok"):
             writer.close()
+            if not target.token:
+                raise ConnectionFailed(f"{target} wants a token: use --token or set $CHSMARTBULB_TOKEN")
             raise ConnectionFailed(f"{target} refused the token")
     return reader, writer
 

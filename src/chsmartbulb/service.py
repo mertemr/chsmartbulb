@@ -581,19 +581,20 @@ class BulbService:
         listen: tuple[str, int] | None = None,
         web: tuple[str, int] | None = None,
         web_root: Path | None = None,
-        web_open: bool = False,
+        open_access: bool = False,
         token: str | None = None,
     ) -> None:
         """Run until cancelled, answering requests on ``socket_path`` and, if given, on TCP ``listen``.
 
         ``web`` is where the web interface is served from, with its files taken from ``web_root``.
-        Network clients must present ``token``; without one the service refuses to listen on TCP.
-        ``web_open`` lets the web interface, and only that, in without it.
+        Network clients must present ``token``; without one the service refuses to listen on
+        the network, unless ``open_access`` says that anyone who can reach it may use it.
         """
-        if (listen is not None or (web is not None and not web_open)) and not token:
+        if open_access:
+            token = None
+        elif (listen is not None or web is not None) and not token:
             raise SmartBulbError("listening on the network needs a token")
-        web_token = None if web_open else token
-        site = None if web is None else _web.Site(functools.partial(self.session, token=web_token), web_root)
+        site = None if web is None else _web.Site(functools.partial(self.session, token=token), web_root)
         if socket_path is not None and await is_running(socket_path):
             raise SmartBulbError(f"a service is already listening on {socket_path}")
         await self.start()
@@ -619,8 +620,8 @@ class BulbService:
                 host, port = server.sockets[0].getsockname()[:2]
                 self.web_address = (host, port)
                 log.info("web interface on http://%s:%s", host, port)
-                if web_open:
-                    log.warning("the web interface asks for no token: anyone who can reach it controls the light")
+            if open_access and len(servers) > (socket_path is not None):
+                log.warning("no token is asked for: anyone who can reach this machine controls the light")
         except OSError as exc:
             for server in servers:
                 server.close()

@@ -192,7 +192,7 @@ class Site:
 
     async def _serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
-            head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), _HEADER_TIMEOUT)
+            head = await asyncio.wait_for(self._head(reader), _HEADER_TIMEOUT)
         except asyncio.LimitOverrunError:
             _respond(writer, 431)
         except (asyncio.IncompleteReadError, asyncio.TimeoutError, ConnectionError) as exc:
@@ -204,6 +204,14 @@ class Site:
         with contextlib.suppress(ConnectionError):
             await writer.drain()
         writer.close()
+
+    @staticmethod
+    async def _head(reader: asyncio.StreamReader) -> bytes:
+        first = await reader.read(1)
+        if first == b"{":
+            # a client of the socket protocol on the wrong port: say so now, it will not send more
+            raise asyncio.IncompleteReadError(first, None)
+        return first + await reader.readuntil(b"\r\n\r\n")
 
     async def _route(self, head: bytes, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         request, *lines = head.decode("latin-1").split("\r\n")

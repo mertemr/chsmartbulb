@@ -8,9 +8,9 @@ import os
 
 import pytest
 
-from chsmartbulb import ChSmartBulb, service, web
+from chsmartbulb import ChSmartBulb, client, service, web
 from chsmartbulb.cli import main
-from chsmartbulb.errors import SmartBulbError
+from chsmartbulb.errors import ConnectionFailed, SmartBulbError
 from fakes import FakeBulbTransport, FakeMusic, until
 
 TOKEN = "s3cret"
@@ -283,7 +283,7 @@ def test_web_interface_can_be_opened_to_everyone_on_purpose(root):
     async def scenario():
         transport = FakeBulbTransport()
         daemon = service.BulbService(ChSmartBulb(transport, auto_reconnect=False), retry_delay=0.01)
-        serving = asyncio.create_task(daemon.serve(None, web=("127.0.0.1", 0), web_root=root, web_open=True))
+        serving = asyncio.create_task(daemon.serve(None, web=("127.0.0.1", 0), web_root=root, open_access=True))
         await until(lambda: daemon.web_address is not None and bool(transport.opened))
         site = Site(root)
         assert daemon.web_address is not None
@@ -298,10 +298,13 @@ def test_web_interface_can_be_opened_to_everyone_on_purpose(root):
     run(scenario())
 
 
-def test_open_web_interface_does_not_open_the_tcp_port(root):
+def test_a_client_of_the_socket_protocol_is_told_it_reached_the_web_port(root):
     async def scenario():
-        daemon = service.BulbService(ChSmartBulb(FakeBulbTransport(), auto_reconnect=False))
-        with pytest.raises(SmartBulbError, match="needs a token"):
-            await daemon.serve(None, listen=("127.0.0.1", 0), web=("127.0.0.1", 0), web_root=root, web_open=True)
+        async with Site(root) as site:
+            status, _, _ = await asyncio.wait_for(site.http('{"cmd": "auth", "token": "x"}'), 1.0)
+            assert status == 400  # at once, not after waiting for the rest of a request
+            lost = client.Remote("127.0.0.1", site.port, TOKEN)
+            with pytest.raises(ConnectionFailed, match=r"web interface.*--listen"):
+                await client.call(lost, {"cmd": "status"})
 
     run(scenario())

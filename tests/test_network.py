@@ -192,12 +192,40 @@ def test_remote_parses_host_and_port():
         client.Remote.parse("desk:http")
 
 
-def test_cli_needs_a_token_for_host_and_reports_an_unreachable_one(monkeypatch, capsys):
+def test_cli_reports_an_unreachable_host_and_a_missing_token(monkeypatch, capsys):
     monkeypatch.delenv("CHSMARTBULB_TOKEN", raising=False)
     assert main(["--host", "127.0.0.1:1", "status"]) == 1
-    assert "token" in capsys.readouterr().err
-    assert main(["--host", "127.0.0.1:1", "--token", "x", "status"]) == 1
     assert "no service on 127.0.0.1:1" in capsys.readouterr().err
+
+    async def scenario():
+        async with Hub() as hub:
+            assert await asyncio.to_thread(main, ["--host", str(hub.remote), "status"]) == 1
+
+    run(scenario())
+    assert "wants a token: use --token" in capsys.readouterr().err
+
+
+def test_service_without_a_token_lets_remote_clients_and_agents_in(capsys):
+    async def scenario():
+        transport = FakeBulbTransport()
+        daemon = service.BulbService(ChSmartBulb(transport, auto_reconnect=False), retry_delay=0.01)
+        serving = asyncio.create_task(daemon.serve(None, listen=("127.0.0.1", 0), open_access=True))
+        await until(lambda: daemon.tcp_address is not None and bool(transport.opened))
+        assert daemon.tcp_address is not None
+        remote = client.Remote("127.0.0.1", daemon.tcp_address[1])
+        assert await client.call(remote, {"cmd": "color", "color": "#00ff00"}) == {"ok": True}
+        assert await asyncio.to_thread(main, ["--host", str(remote), "status"]) == 0  # no --token given
+
+        agent = asyncio.create_task(
+            client.run_agent(remote, source_factory=lambda: ScriptedSource([(Levels(bass=0.5), 0.0)]), retry_delay=0.01)
+        )
+        await until(lambda: daemon._feeds["audio"].agents == 1)
+        agent.cancel()
+        serving.cancel()
+        await asyncio.gather(agent, serving, return_exceptions=True)
+
+    run(scenario())
+    assert "audio:      local" in capsys.readouterr().out
 
 
 def test_cli_talks_to_a_remote_service(capsys):
