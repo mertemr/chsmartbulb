@@ -14,6 +14,7 @@ a command line tool for it.
   follow whatever audio the computer is playing
 - A background service that keeps the connection, runs effects and restores the light when the
   bulb comes back after losing power
+- A web interface served by that service, for phones and other computers on the network
 - Control from other machines on the network, with agents so the light can follow the music or
   the screen of a computer that has no Bluetooth
 - Reading the name, model, colour and stored timers; enabling and disabling timers

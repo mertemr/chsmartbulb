@@ -77,6 +77,38 @@ chsmartbulb --host laptop.local --token SECRET color red
 The traffic is not encrypted and the token travels in clear text, so keep this to a network you
 trust. Without a token the service refuses to listen on the network at all.
 
+### Web interface
+
+The service can serve a page that controls the light from any browser on the network: power,
+colour, the white LEDs, brightness, every effect with its parameters, the bulb's own effects, and
+the device details.
+
+```bash
+chsmartbulb daemon --web 8378
+```
+
+Open `http://laptop.local:8378` and enter the token once; the browser keeps it. Every open page
+follows the light live, whoever changed it, the command line included. The same warning applies
+as for `--listen`: nothing is encrypted, so keep it to a network you trust. `--web 127.0.0.1:8378`
+limits it to the machine itself.
+
+The page is a static bundle of about 30 kB that holds no logic of the service. It is built from
+[`web/`](../web) (Svelte, Tailwind) and the result is kept in `src/chsmartbulb/webui`, so nothing
+but Python is needed to run it. To work on it:
+
+```bash
+cd web
+npm install
+npm run dev      # hot reload on :5173, talking to a daemon started with --web 8378
+npm run build    # writes src/chsmartbulb/webui
+```
+
+The page talks to the service over a WebSocket at `/ws`, where each text message is one object of
+the [socket protocol](#socket-protocol) below, starting with `auth`. Anything that serves the
+same files and answers that protocol can host it, which is what keeps a port of the service to a
+microcontroller possible. The server side is in `chsmartbulb.web` and uses the standard library
+only.
+
 ### Audio from another machine
 
 The sound-reactive effects need to hear the music, which may be playing on a machine that has no
@@ -128,7 +160,18 @@ One JSON object per line in each direction. Replies carry `"ok"` and, on failure
 ```
 
 Commands: `status`, `on`, `off`, `color`, `brightness`, `effect`, `native`, `stop`, `effects`,
-`info`, `timers`, `timer`, `raw`.
+`info`, `timers`, `timer`, `raw`, `subscribe`.
+
+A request may carry an `"id"` of its own choosing, which the reply repeats. After
+`{"cmd": "subscribe"}`, whose reply holds the current state, the service sends
+`{"event": "state", "connected": ..., "playing": ..., "on": ..., "color": ..., "brightness": ...,
+"effect": ..., "native": ..., "audio": ..., "screen": ...}` whenever any of it changes. A client
+that falls behind gets the latest state, not a backlog.
+
+`effects` lists each effect with its default `params` and a `schema` per parameter
+(`{"type": "number", "min", "max", "step"}`, `{"type": "color", "optional"}` or
+`{"type": "colors"}`), plus the names and speed range of the bulb's `native` effects. A front end
+can build its controls from that reply alone.
 
 A network connection must start with `{"cmd": "auth", "token": "..."}`. An agent then sends
 `{"cmd": "audio", "levels": [bass, mid, treble], "onset": 2.4, "balance": -0.2}` for each analysed
@@ -333,5 +376,6 @@ chsmartbulb.music          audio capture and analysis for the sound-reactive eff
 chsmartbulb.screen         screen capture reduced to one colour, for the screen effect
 chsmartbulb.catalog        effects by name with plain parameters
 chsmartbulb.service        background service and its socket protocol
+chsmartbulb.web            the web interface's files and WebSocket, standard library only
 chsmartbulb.client         requests to a running service, and the audio and screen agents
 ```
