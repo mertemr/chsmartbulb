@@ -79,6 +79,7 @@ private val BULB_NAMES = listOf("SmartBulb Bluetooth", "Chsmartbulb")
  * bytes and the end of the link go to the Rust side through the channel given to
  * `connect`; captured sound goes through the channel given to `startAudio`.
  */
+@SuppressLint("MissingPermission") // every Bluetooth call follows `prepare`, which asks for the permissions
 @TauriPlugin(
     permissions = [
         Permission(strings = [Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT], alias = "bluetooth"),
@@ -348,8 +349,10 @@ class BluetoothPlugin(private val activity: Activity) : Plugin(activity) {
         KeepAliveService.start(activity, KeepAliveService.lastTitle, projection = true)
         main.postDelayed({
             try {
+                if (Build.VERSION.SDK_INT < 29) throw IllegalStateException("Capturing playback needs Android 10")
                 val manager = activity.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                 val projection = manager.getMediaProjection(result.resultCode, data)
+                    ?: throw IllegalStateException("Android did not hand over the audio")
                 tap = SoundTap.playback(projection, args.onEvent).also { it.start() }
                 invoke.resolve()
             } catch (e: Exception) {
