@@ -3,6 +3,14 @@
   import { cssColor } from '../lib/color'
 
   type Info = { name: string; model: string; version: string }
+  type Tone = 'ok' | 'busy' | 'down' | 'idle'
+
+  const DOT: Record<Tone, string> = {
+    ok: 'bg-ok',
+    busy: 'bg-accent animate-pulse',
+    down: 'bg-danger',
+    idle: 'bg-muted',
+  }
 
   let info = $state<Info | null>(null)
   let reported = $state<string | null>(null)
@@ -21,41 +29,82 @@
     if (reachable) void refresh()
   })
 
-  const rows = $derived([
-    ['Bulb', { connected: 'connected', connecting: 'connecting…', waiting: 'out of reach' }[app.state?.link ?? 'waiting']],
+  function feed(kind: 'audio' | 'screen'): { tone: Tone; text: string } {
+    const agents = app.state?.agents?.[kind] ?? 0
+    if (!agents) return { tone: 'idle', text: 'the service’s own computer' }
+    return { tone: 'ok', text: agents > 1 ? `${agents} agents` : 'an agent on another computer' }
+  }
+
+  const links = $derived.by((): { name: string; tone: Tone; text: string }[] => {
+    const state = app.state
+    const online = app.link === 'online'
+    const bulb = { connected: 'connected', connecting: 'connecting…', waiting: 'out of reach' }[state?.link ?? 'waiting']
+    const others = (state?.watchers ?? 1) - 1
+    return [
+      { name: 'This page → service', tone: online ? 'ok' : 'busy', text: online ? 'connected' : 'reconnecting…' },
+      {
+        name: 'Service → bulb',
+        tone: state?.link === 'connected' ? 'ok' : state?.link === 'connecting' ? 'busy' : 'down',
+        text: bulb,
+      },
+      { name: 'Sound from', ...feed('audio') },
+      { name: 'Screen from', ...feed('screen') },
+      {
+        name: 'Also watching',
+        tone: others ? 'ok' : 'idle',
+        text: others ? `${others} other ${others > 1 ? 'clients' : 'client'}` : 'nobody else',
+      },
+    ]
+  })
+
+  const details = $derived([
     ['Name', info?.name ?? '–'],
     ['Model', info?.model ?? '–'],
     ['Firmware', info?.version ?? '–'],
-    ['Audio from', app.state?.audio === 'agent' ? 'an agent' : 'this machine'],
-    ['Screen from', app.state?.screen === 'agent' ? 'an agent' : 'this machine'],
   ])
 </script>
 
-<div class="grid gap-4">
-  <h2 class="font-semibold">Device</h2>
-  <dl class="divide-line divide-y text-sm">
-    {#each rows as [term, detail] (term)}
-      <div class="flex min-h-10 items-center justify-between gap-4">
-        <dt class="text-muted">{term}</dt>
-        <dd class="text-right font-medium">{detail}</dd>
-      </div>
-    {/each}
-    {#if reported}
-      <div class="flex min-h-10 items-center justify-between gap-4">
-        <dt class="text-muted">Bulb reports</dt>
-        <dd class="flex items-center gap-2 font-mono text-xs">
-          {reported}
-          <span class="border-line size-5 rounded-md border" style:background={cssColor(reported)}></span>
-        </dd>
-      </div>
+<div class="grid gap-5">
+  <div>
+    <h2 class="font-semibold">Connections</h2>
+    <ul class="divide-line mt-1 divide-y text-sm">
+      {#each links as link (link.name)}
+        <li class="flex min-h-11 items-center gap-3">
+          <span class={['size-2 shrink-0 rounded-full', DOT[link.tone]]}></span>
+          <span class="text-muted">{link.name}</span>
+          <span class="ml-auto text-right font-medium">{link.text}</span>
+        </li>
+      {/each}
+    </ul>
+    {#if app.state?.problem}
+      <p class="text-muted mt-2 text-sm break-words">Last attempt to reach the bulb: {app.state.problem}</p>
     {/if}
-  </dl>
-  {#if app.state?.problem}
-    <p class="text-muted text-sm break-words">Last attempt to connect: {app.state.problem}</p>
-  {/if}
-  {#if problem && reachable}
-    <p class="text-danger text-sm" role="alert">{problem}</p>
-  {/if}
+  </div>
+
+  <div>
+    <h2 class="font-semibold">Bulb</h2>
+    <dl class="divide-line mt-1 divide-y text-sm">
+      {#each details as [term, detail] (term)}
+        <div class="flex min-h-10 items-center justify-between gap-4">
+          <dt class="text-muted">{term}</dt>
+          <dd class="text-right font-medium">{detail}</dd>
+        </div>
+      {/each}
+      {#if reported}
+        <div class="flex min-h-10 items-center justify-between gap-4">
+          <dt class="text-muted">Reports showing</dt>
+          <dd class="flex items-center gap-2 font-mono text-xs">
+            {reported}
+            <span class="border-line size-5 rounded-md border" style:background={cssColor(reported)}></span>
+          </dd>
+        </div>
+      {/if}
+    </dl>
+    {#if problem && reachable}
+      <p class="text-danger mt-2 text-sm" role="alert">{problem}</p>
+    {/if}
+  </div>
+
   <div class="flex gap-2">
     <button
       type="button"
@@ -65,8 +114,14 @@
     >
       Refresh
     </button>
-    <button type="button" class="border-line h-11 flex-1 rounded-xl border text-sm font-medium" onclick={() => app.logout()}>
-      Sign out
-    </button>
+    {#if app.signedIn}
+      <button
+        type="button"
+        class="border-line h-11 flex-1 rounded-xl border text-sm font-medium"
+        onclick={() => app.logout()}
+      >
+        Sign out
+      </button>
+    {/if}
   </div>
 </div>

@@ -14,8 +14,10 @@ export type State = {
   brightness: number
   effect: { name: string; params: Record<string, Value> } | null
   native: { name: string; speed: number } | null
-  audio: string
-  screen: string
+  audio: 'agent' | 'local'
+  screen: 'agent' | 'local'
+  agents: { audio: number; screen: number } // other machines feeding their sound or screen
+  watchers: number // clients following the state, this page included
 }
 
 export type ParamSchema =
@@ -63,18 +65,15 @@ export class Connection {
     const socket = new WebSocket(this.url)
     this.#socket = socket
     socket.onopen = async () => {
-      const auth = await this.request({ cmd: 'auth', token: this.token })
-      if (!auth.ok) {
-        if (auth.error === 'wrong token') {
-          this.close()
-          this.handlers.denied()
-        }
-        return
-      }
-      const first = await this.request({ cmd: 'subscribe' })
+      // without a token, just ask: a service that wants none answers, any other says so
+      const auth = this.token ? await this.request({ cmd: 'auth', token: this.token }) : { ok: true }
+      const first = auth.ok ? await this.request({ cmd: 'subscribe' }) : auth
       if (first.ok) {
         this.#retry = FIRST_RETRY
         this.handlers.online(first as unknown as State)
+      } else if (first.error === 'wrong token' || first.error === 'not authorised') {
+        this.close()
+        this.handlers.denied()
       }
     }
     socket.onmessage = (event) => {

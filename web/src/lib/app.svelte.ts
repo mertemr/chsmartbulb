@@ -27,13 +27,13 @@ class App {
   native = $state<{ names: string[]; speed: [number, number] }>({ names: [], speed: [0, 15] })
   loginError = $state('')
   error = $state('')
+  signedIn = $state(false) // with a token, as opposed to a service that asks for none
 
   #connection: Connection | null = null
   #errorTimer: ReturnType<typeof setTimeout> | undefined
 
   constructor() {
-    const token = remembered()
-    if (token) this.#connect(token)
+    this.#connect(remembered())
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) this.#connection?.hurry()
     })
@@ -70,7 +70,8 @@ class App {
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws'
     this.#connection = new Connection(`${scheme}://${location.host}/ws`, token, {
       online: (state) => {
-        remember(token)
+        if (token) remember(token)
+        this.signedIn = token !== ''
         this.state = state
         this.link = 'online'
         void this.#describe()
@@ -81,7 +82,7 @@ class App {
         remember(null)
         this.state = null
         this.link = 'signed-out'
-        this.loginError = 'That token was refused.'
+        this.loginError = token ? 'That token was refused.' : ''
       },
     })
   }

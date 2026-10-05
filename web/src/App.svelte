@@ -1,7 +1,6 @@
 <script lang="ts">
-  import ColorPanel from './components/ColorPanel.svelte'
   import DevicePanel from './components/DevicePanel.svelte'
-  import EffectsPanel from './components/EffectsPanel.svelte'
+  import LightPanel from './components/LightPanel.svelte'
   import Icon from './components/Icon.svelte'
   import Login from './components/Login.svelte'
   import Slider from './components/Slider.svelte'
@@ -10,8 +9,7 @@
   import { latest } from './lib/latest'
 
   const TABS = [
-    { id: 'colour', label: 'Colour' },
-    { id: 'effects', label: 'Effects' },
+    { id: 'colour', label: 'Light' },
     { id: 'device', label: 'Device' },
   ] as const
   const CARD = 'bg-card border-line rounded-2xl border p-4 sm:p-5'
@@ -52,7 +50,7 @@
   <main class="grid min-h-dvh place-content-center gap-4 px-6 text-center">
     <p class="text-muted">Connecting to the service…</p>
     <button type="button" class="text-accent text-sm font-medium underline" onclick={() => app.logout()}>
-      Use a different token
+      Enter a token
     </button>
   </main>
 {:else}
@@ -126,10 +124,9 @@
             oninput={dim}
           />
         </section>
-        <section class={[CARD, tab !== 'colour' && 'hidden lg:block']}><ColorPanel /></section>
         <section class={[CARD, tab !== 'device' && 'hidden lg:block']}><DevicePanel /></section>
       </div>
-      <section class={[CARD, tab !== 'effects' && 'hidden lg:block']}><EffectsPanel /></section>
+      <section class={[CARD, 'max-lg:order-first', tab !== 'colour' && 'hidden lg:block']}><LightPanel /></section>
     </main>
   </div>
 
@@ -137,7 +134,7 @@
     class="bg-card/90 border-line fixed inset-x-0 bottom-0 border-t pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden"
     aria-label="Sections"
   >
-    <div class="mx-auto grid max-w-md grid-cols-3">
+    <div class="mx-auto grid max-w-md grid-cols-2">
       {#each TABS as item (item.id)}
         <button
           type="button"
