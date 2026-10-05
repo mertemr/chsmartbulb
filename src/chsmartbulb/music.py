@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 RATE = 22050
 BLOCK = 512  # 23 ms per analysis step
 DEFAULT_DEVICE = "@DEFAULT_MONITOR@"
+_DEFAULT_MICROPHONE = "@DEFAULT_SOURCE@"  # the same thing, for PulseAudio
 BACKENDS = ("auto", "parec", "wasapi", "soundcard")
 DEFAULT_SENSITIVITY = 0.5
 
@@ -43,6 +44,8 @@ log = logging.getLogger(__name__)
 _BANDS_HZ = ((40, 250), (250, 2000), (2000, 8000))
 _GAIN_HALF_LIFE = 4.0  # seconds for the automatic gain to forget a loud passage
 _SILENCE = 1e-4
+_ROOM_MARGIN = 2.0  # a microphone's sound must stand this many times above the room's noise
+_ROOM_DOUBLING = 30.0  # seconds for the estimate of that noise to double while nothing dips below it
 _BEAT_GAP = 0.15  # seconds; caps detection at 400 bpm
 _BEAT_FLOOR = 0.05  # a beat needs the bass above this fraction of its recent peak
 _ONSET_CAP = 100.0
@@ -163,9 +166,13 @@ class MusicSource(_Published):
     """Analyses PCM audio into band levels and beats.
 
     :meth:`feed` does the analysis and can be driven by anything; :meth:`start`
-    feeds it from the system's audio output. ``on_block`` is called with every
-    analysed block and its onset strength before any delay, which is what the
-    audio agent forwards.
+    feeds it from the system's audio output, or with ``mic`` from a microphone.
+    ``on_block`` is called with every analysed block and its onset strength
+    before any delay, which is what the audio agent forwards.
+
+    A microphone hears the room as well as the music, so with ``mic`` the
+    steady noise of the room is estimated and taken off each band. Without that
+    the automatic gain would turn a quiet room's hiss into a full level.
     """
 
     def __init__(
@@ -176,6 +183,7 @@ class MusicSource(_Published):
         channels: int = 1,
         device: str = DEFAULT_DEVICE,
         backend: str = "auto",
+        mic: bool = False,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         super().__init__(clock)
@@ -188,6 +196,8 @@ class MusicSource(_Published):
         self._np: Any = numpy
         self._device = device
         self._backend = backend
+        self._mic = mic
+        self._room = [math.inf, math.inf, math.inf]  # the quietest each band has been lately
         self.on_block: Callable[[Levels, float], None] | None = None
         self._configure(rate, block, channels)
         self._peaks = [0.0, 0.0, 0.0]
@@ -208,6 +218,7 @@ class MusicSource(_Published):
         hz_per_bin = rate / block
         self._bins = [(max(1, round(lo / hz_per_bin)), round(hi / hz_per_bin)) for lo, hi in _BANDS_HZ]
         self._decay = 0.5 ** (block / rate / _GAIN_HALF_LIFE)
+        self._room_rise = 2.0 ** (block / rate / _ROOM_DOUBLING)
         self._pending = bytearray()
 
     def feed(self, pcm: bytes) -> None:
@@ -230,6 +241,8 @@ class MusicSource(_Published):
         samples = frames.mean(axis=1)
         spectrum = self._np.abs(self._np.fft.rfft(samples * self._window)) / (self._block / 2)
         values = [float(spectrum[lo:hi].mean()) for lo, hi in self._bins]
+        if self._mic:
+            values = [self._above_room(band, value) for band, value in enumerate(values)]
         levels = []
         for i, value in enumerate(values):
             heard = value > _SILENCE
@@ -249,8 +262,13 @@ class MusicSource(_Published):
             self.on_block(result, onset)
         self._publish(result, onset)
 
+    def _above_room(self, band: int, value: float) -> float:
+        """What of ``value`` stands out of the room's noise, which is the least the band has held lately."""
+        self._room[band] = min(value, max(self._room[band], _SILENCE / 10) * self._room_rise)
+        return max(0.0, value - _ROOM_MARGIN * self._room[band])
+
     async def start(self) -> None:
-        """Begin capturing the system's audio output in the background."""
+        """Begin capturing the system's audio output, or the microphone, in the background."""
         if self._task is None:
             self._task = asyncio.create_task(self._capture())
 
@@ -293,7 +311,7 @@ class MusicSource(_Published):
         loop = asyncio.get_running_loop()
         audio = pyaudio.PyAudio()
         try:
-            device = self._wasapi_loopback(audio)
+            device = self._wasapi_microphone(audio) if self._mic else self._wasapi_loopback(audio)
             channels = int(device["maxInputChannels"])
             rate = int(device["defaultSampleRate"])
             self._configure(rate, channels=channels)
@@ -348,6 +366,21 @@ class MusicSource(_Published):
                 return device
         raise LookupError(f"no output matches {self._device!r}; available: {', '.join(names) or 'none'}")
 
+    def _wasapi_microphone(self, audio: Any) -> Any:
+        """The default input, or the input whose name contains the chosen device."""
+        if self._device == DEFAULT_DEVICE:
+            return audio.get_default_input_device_info()
+        wanted = self._device.lower()
+        names = []
+        for index in range(audio.get_device_count()):
+            device = audio.get_device_info_by_index(index)
+            if int(device["maxInputChannels"]) < 1 or device.get("isLoopbackDevice"):
+                continue
+            names.append(str(device["name"]))
+            if wanted in names[-1].lower():
+                return device
+        raise LookupError(f"no microphone matches {self._device!r}; available: {', '.join(names) or 'none'}")
+
     async def _capture_soundcard(self) -> None:
         """Loopback capture through the ``soundcard`` package (WASAPI on Windows)."""
         try:
@@ -375,8 +408,12 @@ class MusicSource(_Published):
 
         def record() -> None:
             try:
-                name = str(soundcard.default_speaker().name) if self._device == DEFAULT_DEVICE else self._device
-                loopback = soundcard.get_microphone(id=name, include_loopback=True)
+                if self._mic:
+                    chosen = self._device == DEFAULT_DEVICE
+                    loopback = soundcard.default_microphone() if chosen else soundcard.get_microphone(id=self._device)
+                else:
+                    name = str(soundcard.default_speaker().name) if self._device == DEFAULT_DEVICE else self._device
+                    loopback = soundcard.get_microphone(id=name, include_loopback=True)
                 with loopback.recorder(samplerate=self._rate, channels=2, blocksize=self._block) as recorder:
                     while not stopping.is_set():
                         frames = recorder.record(numframes=self._block)
@@ -397,9 +434,10 @@ class MusicSource(_Published):
 
     async def _capture_parec(self) -> None:
         self._configure(self._rate, self._block, channels=2)
+        device = _DEFAULT_MICROPHONE if self._mic and self._device == DEFAULT_DEVICE else self._device
         command = [
             "parec",
-            f"--device={self._device}",
+            f"--device={device}",
             "--format=s16le",
             f"--rate={self._rate}",
             "--channels=2",

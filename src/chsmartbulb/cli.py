@@ -147,7 +147,7 @@ def _bulb(args: argparse.Namespace, **options: Any) -> ChSmartBulb:
 
 
 def _music(args: argparse.Namespace) -> functools.partial[MusicSource]:
-    return functools.partial(MusicSource, device=args.audio_device, backend=args.audio_backend)
+    return functools.partial(MusicSource, device=args.audio_device, backend=args.audio_backend, mic=args.mic)
 
 
 def _screen(args: argparse.Namespace) -> functools.partial[ScreenCapture]:
@@ -244,6 +244,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="audio source for sound-reactive effects (default: monitor of the default output)",
     )
     parser.add_argument("--audio-backend", choices=BACKENDS, default="auto", help="how the audio is captured")
+    parser.add_argument(
+        "--mic",
+        action="store_true",
+        help="listen to the microphone instead of what the computer plays (--audio-device then names an input)",
+    )
     parser.add_argument(
         "--monitor", type=int, default=PRIMARY, metavar="N", help="which monitor the screen effect follows; 0 is all"
     )

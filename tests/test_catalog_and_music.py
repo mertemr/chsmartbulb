@@ -250,8 +250,25 @@ class FakePortAudio:
         self.terminated = False
         FakePortAudio.instances.append(self)
 
+    inputs: ClassVar = [
+        {"index": 1, "name": "Microphone (Webcam)", "maxInputChannels": 1, "defaultSampleRate": 44100.0},
+        {"index": 2, "name": "Headset Microphone", "maxInputChannels": 2, "defaultSampleRate": 48000.0},
+    ]
+
     def get_default_wasapi_loopback(self):
         return self.devices[1]
+
+    def get_default_input_device_info(self):
+        return self.inputs[0]
+
+    def get_device_count(self):
+        return 8
+
+    def get_device_info_by_index(self, index):
+        known = {device["index"]: device for device in self.inputs}
+        loopback = {device["index"]: {**device, "isLoopbackDevice": True} for device in self.devices}
+        output = {"index": index, "name": "Speakers", "maxInputChannels": 0, "defaultSampleRate": 48000.0}
+        return known.get(index) or loopback.get(index) or output
 
     def get_loopback_device_info_generator(self):
         return iter(self.devices)
@@ -533,3 +550,66 @@ def test_custom_effect_takes_its_steps_as_data_or_as_json_text():
         "easings": ["linear", "ease-in", "ease-out", "ease-in-out"],
     }
     assert info["params"]["steps"][0] == {"color": "#ff0000", "hold": 1.0, "fade": 1.0, "ease": "ease-in-out"}
+
+
+def test_microphone_capture_learns_the_room_and_ignores_it():
+    heard = []
+    source = music.MusicSource(mic=True)
+    source.on_block = lambda levels, onset: heard.append(levels.bass)
+    source.feed(tone(100, 2.0, amplitude=0.01))  # the hum of the room
+    assert max(heard) == 0.0
+    source.feed(tone(100, 0.2, amplitude=0.5))
+    assert heard[-1] > 0.9
+    source.feed(tone(100, 0.2, amplitude=0.01))
+    assert heard[-1] == 0.0  # the room again, not a faint sound
+
+    played = []
+    output = music.MusicSource()  # what plays on the computer has no room in it
+    output.on_block = lambda levels, onset: played.append(levels.bass)
+    output.feed(tone(100, 0.2, amplitude=0.01))
+    assert played[-1] > 0.9
+
+
+def test_microphone_is_asked_for_from_each_backend(monkeypatch):
+    FakePortAudio.instances.clear()
+    monkeypatch.setitem(sys.modules, "pyaudiowpatch", types.SimpleNamespace(PyAudio=FakePortAudio, paInt16=8))
+    commands = []
+
+    async def no_parec(*command, **options):
+        commands.append(command)
+        raise FileNotFoundError
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", no_parec)
+
+    async def opened(device=music.DEFAULT_DEVICE):
+        source = music.MusicSource(backend="wasapi", mic=True, device=device)
+        await source.start()
+        await asyncio.sleep(0.01)
+        chosen = FakePortAudio.instances[-1].opened
+        await source.stop()
+        return chosen["input_device_index"], chosen["channels"], chosen["rate"]
+
+    async def scenario():
+        assert await opened() == (1, 1, 44100)  # the default input, not the loopback of the output
+        assert await opened(device="headset") == (2, 2, 48000)
+        missing = music.MusicSource(backend="wasapi", mic=True, device="speakers")
+        await missing.start()
+        with pytest.raises(SmartBulbError, match=r"no microphone matches 'speakers'.*Webcam"):
+            await missing.wait()
+
+        for device in (music.DEFAULT_DEVICE, "alsa_input.usb"):
+            source = music.MusicSource(backend="parec", mic=True, device=device)
+            await source.start()
+            with pytest.raises(SmartBulbError, match="parec"):
+                await source.wait()
+
+    asyncio.run(scenario())
+    assert [command[1] for command in commands] == ["--device=@DEFAULT_SOURCE@", "--device=alsa_input.usb"]
+
+
+def test_cli_passes_the_microphone_choice_on():
+    from chsmartbulb import cli
+
+    args = cli.build_parser().parse_args(["--mic", "audio-agent"])
+    assert cli._music(args).keywords["mic"] is True
+    assert cli._music(cli.build_parser().parse_args(["audio-agent"])).keywords["mic"] is False
