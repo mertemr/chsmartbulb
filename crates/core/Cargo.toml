@@ -1,0 +1,20 @@
+[package]
+name = "chsmartbulb-core"
+description = "Protocol, effects and background service of the CHSmartBulb / BL08A speaker bulb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+log.workspace = true
+rustfft = "6"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }

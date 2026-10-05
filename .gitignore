@@ -13,3 +13,6 @@ research/cam.json
 
 # the web interface's toolchain; its built bundle in src/chsmartbulb/webui is tracked
 web/node_modules/
+
+# Rust
+target/
