@@ -186,8 +186,8 @@ it returns. `agents` counts the connected agents of each kind and `watchers` the
 clients. `reconnect` makes the service try at once instead of waiting out its retry delay.
 
 `effects` lists each effect with its default `params` and a `schema` per parameter
-(`{"type": "number", "min", "max", "step"}`, `{"type": "color", "optional"}` or
-`{"type": "colors"}`), plus the names and speed range of the bulb's `native` effects. A front end
+(`{"type": "number", "min", "max", "step"}`, `{"type": "color", "optional"}`,
+`{"type": "colors"}` or `{"type": "steps", "most", "easings"}`), plus the names and speed range of the bulb's `native` effects. A front end
 can build its controls from that reply alone.
 
 A network connection must start with `{"cmd": "auth", "token": "..."}`. An agent then sends
@@ -209,6 +209,7 @@ A screen agent sends `{"cmd": "screen", "color": "#rrggbb"}` whenever the colour
 | `candle` | Uneven flicker | `color`, `depth` |
 | `palette` | Drift through a list of colours | `colors`, `hold`, `fade_in` |
 | `police` | Alternate red and blue | `period` |
+| `custom` | Your own colours, timings and fades | `steps`, `speed` |
 | `music` | Flash on the beat | `color`, `decay`, `sensitivity`, `delay` |
 | `spectrum` | Bass, mids and treble as red, green and blue | `release`, `delay` |
 | `volume` | One colour, as bright as the sound is loud | `color`, `release`, `floor`, `delay` |
@@ -220,6 +221,20 @@ chsmartbulb effect breathe -c 00ff00 -p 3
 chsmartbulb effect palette -s colors=red,ff8000,blue -s hold=5
 chsmartbulb effect music -b 60
 ```
+
+`custom` plays a list of steps in a loop. Each step fades into its colour, then holds it:
+
+```bash
+chsmartbulb effect custom -s speed=2 -s steps='[
+  {"color": "ff0000", "hold": 2},
+  {"color": "0040ff", "hold": 1, "fade": 3, "ease": "ease-in-out"}
+]'
+```
+
+Only `color` is required; `hold` defaults to 1 second and `fade` to 0. `ease` shapes the fade:
+`linear`, `ease-in`, `ease-out` or `ease-in-out`. `speed` multiplies the pace of the whole
+sequence, and there can be up to 16 steps. The web interface has an editor for it under Patterns
+and keeps the last settings of every effect in the browser.
 
 ### Sound-reactive effects
 
@@ -354,8 +369,8 @@ await player.start(effects.breathe(Color(r=255, g=60), period=4))
 ...
 await player.stop()
 
-# custom sequence: (colour, hold seconds, fade-in seconds)
-alarm = effects.sequence([(Color(r=255), 0.3), (Color(), 0.3), (Color(b=255), 1.0, 0.5)])
+# custom sequence: (colour, hold seconds, fade-in seconds, easing of the fade)
+alarm = effects.sequence([(Color(r=255), 0.3), (Color(), 0.3), (Color(b=255), 1.0, 0.5, "ease-out")])
 
 # anything else
 def flicker(t: float) -> Color:
@@ -363,7 +378,7 @@ def flicker(t: float) -> Color:
 ```
 
 Building blocks: `solid`, `breathe`, `hue_cycle`, `pulse`, `strobe`, `candle`, `palette`, `fade`,
-`sequence`, `dimmed`. `catalog.create(name, params)` builds one from plain data.
+`sequence`, `custom`, `dimmed`. `catalog.create(name, params)` builds one from plain data.
 
 Sound-reactive effects read from a `MusicSource`:
 
