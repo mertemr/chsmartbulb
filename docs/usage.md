@@ -75,7 +75,8 @@ chsmartbulb --host laptop.local --token SECRET color red
 ```
 
 The traffic is not encrypted and the token travels in clear text, so keep this to a network you
-trust. Without a token the service refuses to listen on the network at all.
+trust. Without a token the service refuses to listen on the network, unless it is started with
+`--no-token`; the other machines then leave `--token` out.
 
 ### Web interface
 
@@ -94,8 +95,8 @@ again at once. The same warning applies
 as for `--listen`: nothing is encrypted, so keep it to a network you trust. `--web 127.0.0.1:8378`
 limits it to the machine itself.
 
-`--web-no-token` drops the token for the web interface only, so the page opens straight away for
-anyone who can reach it. The `--listen` port still asks for one.
+`--no-token` drops the token for `--web` and `--listen` alike: the page opens straight away and
+the other machines leave `--token` out. Anyone who can reach the machine then controls the light.
 
 What the light does is one of five modes, and choosing something in a mode switches to it: a
 steady colour, a pattern that runs on time alone, an effect that follows the sound, one that
@@ -190,7 +191,8 @@ clients. `reconnect` makes the service try at once instead of waiting out its re
 `{"type": "colors"}` or `{"type": "steps", "most", "easings"}`), plus the names and speed range of the bulb's `native` effects. A front end
 can build its controls from that reply alone.
 
-A network connection must start with `{"cmd": "auth", "token": "..."}`. An agent then sends
+A network connection must start with `{"cmd": "auth", "token": "..."}`, unless the service runs
+with `--no-token`. An agent then sends
 `{"cmd": "audio", "levels": [bass, mid, treble], "onset": 2.4, "balance": -0.2}` for each analysed
 block; those are not answered. `onset` is how far the bass stands above its recent average and
 `balance` runs from -1 (left) to 1 (right); both are left out when there is nothing to report.

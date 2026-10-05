@@ -6,7 +6,7 @@
 
   const WHAT = { audio: 'sound', screen: 'screen' }
   const agents = $derived(app.state?.agents?.[kind] ?? 0)
-  const command = $derived(`chsmartbulb --host ${location.hostname} --token … ${kind}-agent`)
+  const command = $derived(`chsmartbulb --host ${location.hostname}${app.signedIn ? ' --token …' : ''} ${kind}-agent`)
 </script>
 
 <div class="bg-raised grid gap-2 rounded-xl p-3 text-sm">
@@ -22,8 +22,8 @@
   <details class="text-muted">
     <summary class="cursor-pointer py-1">Use another computer's {WHAT[kind]}</summary>
     <p class="mt-1">
-      Run an agent there. It takes over while it is connected and hands back when it leaves. The service
-      must have been started with <code>--listen</code>.
+      Run an agent there. It takes over while it is connected and hands back when it leaves. Agents
+      come in through the port the service was given with <code>--listen</code>, not through this page's.
     </p>
     <pre class="bg-card border-line text-ink mt-2 overflow-x-auto rounded-lg border p-2 text-xs">{command}</pre>
   </details>
