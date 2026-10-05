@@ -67,9 +67,8 @@ jobs:
           npm ci --prefix app
       - name: Generate the Android project
         working-directory: app
-        env:
-          NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
         run: |
+          export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
           npx tauri android init --ci
           npx tauri icon icon.svg
           # the app can also reach a Python service on the local network over plain ws://
@@ -77,9 +76,9 @@ jobs:
             src-tauri/gen/android/app/build.gradle.kts
       - name: Build the APK
         working-directory: app
-        env:
-          NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
-        run: npx tauri android build --apk --ci --target aarch64 armv7 x86_64
+        run: |
+          export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          npx tauri android build --apk --ci --target aarch64 armv7 x86_64
       - name: Sign the APK
         env:
           KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}

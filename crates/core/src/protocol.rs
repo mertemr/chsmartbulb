@@ -394,7 +394,9 @@ pub fn parse_timers(frame: &Frame) -> Result<Vec<Timer>> {
         return Err(Error::Protocol(format!("timer list truncated: {count} entries in {} bytes", records.len())));
     }
     Ok(records
-        .chunks_exact(TIMER_RECORD)
+        .as_chunks::<TIMER_RECORD>()
+        .0
+        .iter()
         .take(count)
         .map(|raw| {
             let tail = &raw[TIMER_NAME..];

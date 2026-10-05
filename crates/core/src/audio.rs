@@ -258,7 +258,7 @@ impl Analyzer {
 
     /// Like [`feed`](Self::feed), from little-endian bytes as most capture APIs deliver them.
     pub fn feed_bytes(&mut self, pcm: &[u8]) -> Vec<(Levels, f64)> {
-        let samples: Vec<i16> = pcm.chunks_exact(2).map(|pair| i16::from_le_bytes([pair[0], pair[1]])).collect();
+        let samples: Vec<i16> = pcm.as_chunks::<2>().0.iter().map(|pair| i16::from_le_bytes(*pair)).collect();
         self.feed(&samples)
     }
 
