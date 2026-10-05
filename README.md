@@ -1,5 +1,7 @@
 # chsmartbulb
 
+<img src="docs/images/bulb.jpg" alt="The bulb, as its sellers picture it with the vendor app" width="220" align="right">
+
 Control the CHSmartBulb / BL08A Bluetooth speaker bulb from a computer, without the vendor app.
 
 The app (CHSmartBulb) no longer runs on current phones, which leaves these bulbs stuck on whatever
@@ -21,6 +23,20 @@ a command line tool for it.
 - Bluetooth Classic (RFCOMM) and BLE transports
 
 Colour temperature is not supported by the hardware.
+
+## Web interface
+
+`chsmartbulb daemon --web 8378` serves a page for phones and other computers on the network; see
+[the usage notes](docs/usage.md#web-interface).
+
+<p>
+  <img src="docs/images/web-desktop.png" alt="The web interface on a wide screen: brightness, connections and the colour wheel" width="100%">
+</p>
+<p>
+  <img src="docs/images/web-colour.png" alt="Choosing a colour on a phone" width="32%">
+  <img src="docs/images/web-custom.png" alt="Editing the steps of a custom effect" width="32%">
+  <img src="docs/images/web-sound.png" alt="The effects that follow the sound" width="32%">
+</p>
 
 ## Install
 
@@ -91,6 +107,9 @@ Earlier work on these bulbs that this project started from:
 [samsam2310/Bluetooth-Chsmartbulb-Python-API](https://github.com/samsam2310/Bluetooth-Chsmartbulb-Python-API),
 [rafaelbiasi/ChSmartBulbAPI](https://github.com/rafaelbiasi/ChSmartBulbAPI) and
 [roelderickx/bluetooth-smartbulb](https://github.com/roelderickx/bluetooth-smartbulb).
+
+The picture of the bulb is the sellers' product picture, as kept in the first and third of those
+repositories. The screenshots are of the web interface driving a simulated bulb.
 
 ## License
 
