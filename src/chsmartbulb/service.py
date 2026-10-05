@@ -284,7 +284,14 @@ class BulbService:
         """Call ``listener`` with the state whenever it changes; returns the way to stop that."""
         self._listeners.add(listener)
         self._told = self._state()
-        return functools.partial(self._listeners.discard, listener)
+        for other in tuple(self._listeners - {listener}):
+            other(self._told)  # one more is watching
+
+        def unsubscribe() -> None:
+            self._listeners.discard(listener)
+            self._notify()
+
+        return unsubscribe
 
     def _state(self) -> dict[str, Any]:
         connected = self._bulb.is_connected
@@ -294,6 +301,8 @@ class BulbService:
             "problem": None if connected else self._problem,
             "playing": self._playing,
             **{kind: "agent" if feed.agents else "local" for kind, feed in self._feeds.items()},
+            "agents": {kind: feed.agents for kind, feed in self._feeds.items()},
+            "watchers": len(self._listeners),
             **self._plan.to_json(),
         }
 
@@ -572,16 +581,19 @@ class BulbService:
         listen: tuple[str, int] | None = None,
         web: tuple[str, int] | None = None,
         web_root: Path | None = None,
+        web_open: bool = False,
         token: str | None = None,
     ) -> None:
         """Run until cancelled, answering requests on ``socket_path`` and, if given, on TCP ``listen``.
 
         ``web`` is where the web interface is served from, with its files taken from ``web_root``.
         Network clients must present ``token``; without one the service refuses to listen on TCP.
+        ``web_open`` lets the web interface, and only that, in without it.
         """
-        if (listen is not None or web is not None) and not token:
+        if (listen is not None or (web is not None and not web_open)) and not token:
             raise SmartBulbError("listening on the network needs a token")
-        site = None if web is None else _web.Site(functools.partial(self.session, token=token), web_root)
+        web_token = None if web_open else token
+        site = None if web is None else _web.Site(functools.partial(self.session, token=web_token), web_root)
         if socket_path is not None and await is_running(socket_path):
             raise SmartBulbError(f"a service is already listening on {socket_path}")
         await self.start()
@@ -607,6 +619,8 @@ class BulbService:
                 host, port = server.sockets[0].getsockname()[:2]
                 self.web_address = (host, port)
                 log.info("web interface on http://%s:%s", host, port)
+                if web_open:
+                    log.warning("the web interface asks for no token: anyone who can reach it controls the light")
         except OSError as exc:
             for server in servers:
                 server.close()

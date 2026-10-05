@@ -169,14 +169,15 @@ def _remote(args: argparse.Namespace) -> client.Remote:
 
 async def _daemon(args: argparse.Namespace) -> None:
     for option in ("listen", "web"):
-        if getattr(args, option) is not None and not args.token:
+        needed = getattr(args, option) is not None and not (option == "web" and args.web_no_token)
+        if needed and not args.token:
             raise SmartBulbError(f"--{option} needs a token: use --token or set ${ENV_TOKEN}")
     bulb = _bulb(args, auto_reconnect=False)
     state_path = None if args.no_state else service.default_state_path()
     daemon = service.BulbService(
         bulb, state_path=state_path, fps=args.fps, music_factory=_music(args), screen_factory=_screen(args)
     )
-    await daemon.serve(args.socket, listen=args.listen, web=args.web, token=args.token)
+    await daemon.serve(args.socket, listen=args.listen, web=args.web, web_open=args.web_no_token, token=args.token)
 
 
 async def _agent(args: argparse.Namespace) -> None:
@@ -269,6 +270,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=_listen,
         metavar="[HOST:]PORT",
         help=f"also serve the web interface on this address (needs a token; usual port {web.DEFAULT_PORT})",
+    )
+    cmd.add_argument(
+        "--web-no-token",
+        action="store_true",
+        help="let anyone who can reach the web interface use it, without the token",
     )
 
     sub.add_parser("audio-agent", help="analyse this machine's audio and feed it to a service (see --host)")

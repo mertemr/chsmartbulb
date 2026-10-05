@@ -277,3 +277,31 @@ def test_cli_refuses_to_serve_the_web_interface_without_a_token(monkeypatch, cap
     monkeypatch.delenv("CHSMARTBULB_TOKEN", raising=False)
     assert main(["--address", "AA:BB:CC:DD:EE:FF", "daemon", "--web", "8378"]) == 1
     assert "--web needs a token" in capsys.readouterr().err
+
+
+def test_web_interface_can_be_opened_to_everyone_on_purpose(root):
+    async def scenario():
+        transport = FakeBulbTransport()
+        daemon = service.BulbService(ChSmartBulb(transport, auto_reconnect=False), retry_delay=0.01)
+        serving = asyncio.create_task(daemon.serve(None, web=("127.0.0.1", 0), web_root=root, web_open=True))
+        await until(lambda: daemon.web_address is not None and bool(transport.opened))
+        site = Site(root)
+        assert daemon.web_address is not None
+        site.port = daemon.web_address[1]
+        ws = await site.socket()
+        assert (await ws.ask(cmd="subscribe"))["ok"]  # no token asked for
+        assert (await ws.ask(cmd="color", color="#00ff00"))["ok"]
+        ws.close()
+        serving.cancel()
+        await asyncio.gather(serving, return_exceptions=True)
+
+    run(scenario())
+
+
+def test_open_web_interface_does_not_open_the_tcp_port(root):
+    async def scenario():
+        daemon = service.BulbService(ChSmartBulb(FakeBulbTransport(), auto_reconnect=False))
+        with pytest.raises(SmartBulbError, match="needs a token"):
+            await daemon.serve(None, listen=("127.0.0.1", 0), web=("127.0.0.1", 0), web_root=root, web_open=True)
+
+    run(scenario())

@@ -342,3 +342,21 @@ def test_state_says_why_the_bulb_is_away_and_a_request_can_retry_at_once():
         await daemon.close()
 
     run(scenario())
+
+
+def test_state_counts_who_is_watching_and_feeding():
+    async def scenario():
+        daemon = await attached(FakeBulbTransport())
+        first, second = [], []
+        daemon.subscribe(first.append)
+        assert not first  # a newcomer is told the state in its reply, not as a change
+        leave = daemon.subscribe(second.append)
+        assert (first[-1]["watchers"], second) == (2, [])
+        await daemon._agent_joined("audio")
+        assert first[-1]["agents"] == {"audio": 1, "screen": 0}
+        assert first[-1]["audio"] == "agent"
+        leave()
+        assert first[-1]["watchers"] == 1
+        await daemon.close()
+
+    run(scenario())
