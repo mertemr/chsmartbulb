@@ -267,6 +267,20 @@ chsmartbulb effect stereo -s left=00ffff -s right=ff00ff -s width=6
 `--audio-device SOURCE` picks a different source, for example the monitor of one particular
 output (`pactl list short sources` shows the names).
 
+`--mic` listens to the microphone instead, for music that plays on something the computer cannot
+tap: a record player, a television, a phone. It works for the service and for the audio agent
+alike, and `--audio-device` then names an input rather than an output.
+
+```bash
+chsmartbulb --mic daemon
+chsmartbulb --host laptop.local --token SECRET --mic audio-agent
+```
+
+A microphone also hears the room, so the steady noise of the room is estimated and taken off:
+the light reacts to what stands out of it. That estimate needs a second or two after starting,
+and music that never pauses slowly raises it, which costs some of the quiet passages. `stereo`
+needs a stereo microphone to show anything but the middle.
+
 The capture hears the sound before a Bluetooth speaker or headphones play it, so the light runs
 ahead of what you hear. `delay` holds the light back by that many seconds (up to 2):
 
