@@ -6,15 +6,21 @@ import { defineConfig } from 'vitest/config'
 // `chsmartbulb daemon --web 8378`; `npm run build` writes the bundle the daemon serves.
 const daemon = process.env.CHSMARTBULB_WEB ?? 'ws://127.0.0.1:8378'
 
-export default defineConfig({
+// `--mode app` builds the same page for the desktop and mobile app (app/), which talks
+// to the service inside it over Tauri's IPC; a phone reaches the dev server at TAURI_DEV_HOST.
+const host = process.env.TAURI_DEV_HOST
+
+export default defineConfig(({ mode }) => ({
   plugins: [svelte(), tailwindcss()],
   build: {
-    outDir: '../src/chsmartbulb/webui',
+    outDir: mode === 'app' ? 'dist-app' : '../src/chsmartbulb/webui',
     emptyOutDir: true,
     target: 'es2022',
   },
-  server: {
-    proxy: { '/ws': { target: daemon, ws: true } },
-  },
+  clearScreen: mode !== 'app',
+  server:
+    mode === 'app'
+      ? { host: host || false, port: 5173, strictPort: true, hmr: host ? { protocol: 'ws', host, port: 5174 } : undefined }
+      : { proxy: { '/ws': { target: daemon, ws: true } } },
   test: { include: ['src/**/*.test.ts'] },
-})
+}))

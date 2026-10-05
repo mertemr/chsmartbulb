@@ -4,7 +4,7 @@
   import Icon from './components/Icon.svelte'
   import Login from './components/Login.svelte'
   import Slider from './components/Slider.svelte'
-  import { app, Draft } from './lib/app.svelte'
+  import { APP, app, Draft } from './lib/app.svelte'
   import { cssColor } from './lib/color'
   import { latest } from './lib/latest'
 
@@ -18,6 +18,8 @@
 
   const on = $derived(!!app.state?.on)
   const glow = $derived(cssColor(app.state?.color ?? '#000000ff'))
+  // only the app build carries the screen for finding the bulb
+  const setupView = import.meta.env.MODE === 'app' ? import('./components/Setup.svelte') : null
   const brightness = new Draft(() => Math.round((app.state?.brightness ?? 1) * 100))
   const pushBrightness = latest((percent: number) => app.send({ cmd: 'brightness', level: percent / 100 }))
 
@@ -32,7 +34,11 @@
   })
   const link = $derived(app.link === 'online' ? (app.state?.link ?? 'waiting') : 'offline')
   const summary = $derived(
-    { offline: 'Reconnecting to the service…', connecting: 'Connecting to the bulb…', waiting: 'Bulb out of reach' }[
+    {
+      offline: app.mode === 'native' ? 'Starting…' : 'Reconnecting to the service…',
+      connecting: 'Connecting to the bulb…',
+      waiting: 'Bulb out of reach',
+    }[
       link as string
     ] ?? showing,
   )
@@ -46,11 +52,15 @@
 
 {#if app.link === 'signed-out'}
   <Login />
+{:else if app.link === 'setup' && setupView}
+  {#await setupView then { default: Setup }}
+    <Setup />
+  {/await}
 {:else if !app.state}
   <main class="grid min-h-dvh place-content-center gap-4 px-6 text-center">
-    <p class="text-muted">Connecting to the service…</p>
+    <p class="text-muted">{app.mode === 'native' ? 'Starting…' : 'Connecting to the service…'}</p>
     <button type="button" class="text-accent text-sm font-medium underline" onclick={() => app.logout()}>
-      Enter a token
+      {APP ? 'Choose another bulb or service' : 'Enter a token'}
     </button>
   </main>
 {:else}
@@ -94,6 +104,12 @@
           </h2>
           {#if app.state.problem}
             <p class="text-muted break-words">Last attempt: {app.state.problem}</p>
+          {/if}
+          {#if app.mode === 'native' && app.setup?.device?.bearer === 'ble'}
+            <p class="text-muted">
+              Over BLE the bulb answers only while it is not connected as a speaker. Disconnect its audio, or choose
+              Classic (SPP) under Device.
+            </p>
           {/if}
           <p class="text-muted">
             The service keeps trying. Anything set here is kept and applied when the bulb is back; it will

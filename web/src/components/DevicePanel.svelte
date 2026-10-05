@@ -40,15 +40,18 @@
     const online = app.link === 'online'
     const bulb = { connected: 'connected', connecting: 'connecting…', waiting: 'out of reach' }[state?.link ?? 'waiting']
     const others = (state?.watchers ?? 1) - 1
+    const bearer = app.mode === 'native' && app.setup?.device ? ` (${app.setup.device.bearer.toUpperCase()})` : ''
+    const own = app.mode === 'native'
     return [
-      { name: 'This page → service', tone: online ? 'ok' : 'busy', text: online ? 'connected' : 'reconnecting…' },
+      ...(own
+        ? []
+        : [{ name: 'This page → service', tone: online ? 'ok' : 'busy', text: online ? 'connected' : 'reconnecting…' } as const]),
       {
-        name: 'Service → bulb',
+        name: own ? 'Bluetooth' + bearer : 'Service → bulb',
         tone: state?.link === 'connected' ? 'ok' : state?.link === 'connecting' ? 'busy' : 'down',
         text: bulb,
       },
-      { name: 'Sound from', ...feed('audio') },
-      { name: 'Screen from', ...feed('screen') },
+      ...(own ? [] : [{ name: 'Sound from', ...feed('audio') }, { name: 'Screen from', ...feed('screen') }]),
       {
         name: 'Also watching',
         tone: others ? 'ok' : 'idle',
@@ -114,13 +117,13 @@
     >
       Refresh
     </button>
-    {#if app.signedIn}
+    {#if app.mode !== 'web' || app.signedIn}
       <button
         type="button"
         class="border-line h-11 flex-1 rounded-xl border text-sm font-medium"
         onclick={() => app.logout()}
       >
-        Sign out
+        {app.mode === 'native' ? 'Change bulb' : app.mode === 'remote' ? 'Leave this service' : 'Sign out'}
       </button>
     {/if}
   </div>
