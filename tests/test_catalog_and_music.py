@@ -515,4 +515,21 @@ def test_every_parameter_has_a_schema_that_admits_its_default():
             elif schema["type"] == "color":
                 assert schema["optional"] == (default is None), (info["name"], key)
             else:
-                assert schema == {"type": "colors"}
+                assert schema["type"] in ("colors", "steps")
+
+
+def test_custom_effect_takes_its_steps_as_data_or_as_json_text():
+    steps = [{"color": "#00ff00", "hold": 2.0, "fade": 1.0, "ease": "ease-out"}]
+    assert catalog.create("custom", {"steps": steps})(1.5) == Color(g=255)
+    assert catalog.create("custom", {"steps": '[{"color": "red"}]', "speed": "2"})(0.0) == Color(r=255)
+    with pytest.raises(ValueError, match="steps must be a list"):
+        catalog.resolve("custom", {"steps": "red, blue"})
+    with pytest.raises(ValueError, match="unknown easing"):
+        catalog.create("custom", {"steps": [{"color": "red", "ease": "wobble"}]})
+    info = next(item for item in catalog.describe() if item["name"] == "custom")
+    assert info["schema"]["steps"] == {
+        "type": "steps",
+        "most": 16,
+        "easings": ["linear", "ease-in", "ease-out", "ease-in-out"],
+    }
+    assert info["params"]["steps"][0] == {"color": "#ff0000", "hold": 1.0, "fade": 1.0, "ease": "ease-in-out"}

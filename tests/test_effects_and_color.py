@@ -2,6 +2,7 @@
 
 import asyncio
 import itertools
+from typing import Any, cast
 
 import pytest
 
@@ -116,3 +117,44 @@ def test_cli_requires_an_address_when_no_service_is_running(monkeypatch, capsys,
     monkeypatch.delenv("CHSMARTBULB_ADDRESS", raising=False)
     assert main(["--socket", str(tmp_path / "none.sock"), "on"]) == 1
     assert "no address given" in capsys.readouterr().err
+
+
+def test_sequence_steps_can_ease_their_fade():
+    black, white = Color(), Color(r=200, g=200, b=200)
+    for name, quarter in (("linear", 50), ("ease-in", 12), ("ease-out", 88), ("ease-in-out", 31)):
+        effect = effects.sequence([(black, 0.0), (white, 1.0, 4.0, name)])
+        assert effect(1.0).r == quarter, name  # a quarter of the way through the fade
+        assert (effect(0.0).r, effect(4.0).r) == (0, 200), name
+    with pytest.raises(ValueError, match="unknown easing"):
+        effects.sequence([(white, 1.0, 1.0, "bounce")])
+
+
+def test_custom_effect_is_built_from_plain_steps():
+    steps = [
+        {"color": "#ff0000", "hold": 1.0},
+        {"color": "#0000ff", "hold": 1.0, "fade": 2.0, "ease": "ease-in-out"},
+    ]
+    effect = effects.custom(steps)
+    assert effect(0.5) == Color(r=255)
+    assert effect(2.0) == Color(r=128, b=128)  # halfway through the eased fade
+    assert effect(3.5) == Color(b=255)
+    assert effect(4.5) == Color(r=255)  # and round again
+    assert effects.custom(steps, speed=2.0)(1.0) == effect(2.0)
+
+
+def test_custom_effect_rejects_what_it_cannot_play():
+    step = {"color": "#ff0000", "hold": 1.0}
+    cases = (
+        ([], 1.0, "at least one step"),
+        ([step] * 17, 1.0, "at most 16"),
+        ([{"hold": 1.0}], 1.0, "needs a color"),
+        ([{**step, "hold": -1}], 1.0, "must not be negative"),
+        ([{**step, "ease": "bounce"}], 1.0, "unknown easing"),
+        ([{**step, "sparkle": 1}], 1.0, "has no 'sparkle'"),
+        (["red"], 1.0, "must be an object"),
+        ([{**step, "hold": 0}], 1.0, "longer than zero"),
+        ([step], 0, "speed must be positive"),
+    )
+    for steps, speed, fragment in cases:
+        with pytest.raises(ValueError, match=fragment):
+            effects.custom(cast("Any", steps), speed)  # wrong on purpose

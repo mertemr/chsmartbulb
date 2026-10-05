@@ -12,10 +12,10 @@ import asyncio
 import contextlib
 import math
 import time
-from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING
+from collections.abc import Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any
 
-from .color import OFF, Color
+from .color import OFF, Color, parse_color
 
 if TYPE_CHECKING:
     from .light import Light
@@ -26,6 +26,15 @@ Effect = Callable[[float], Color]
 DEFAULT_FPS = 20.0
 
 WARM = Color(r=255, g=110, b=20)
+
+#: How a fade moves from 0 to 1 as its time runs from 0 to 1.
+EASINGS: dict[str, Callable[[float], float]] = {
+    "linear": lambda x: x,
+    "ease-in": lambda x: x * x,
+    "ease-out": lambda x: 1 - (1 - x) ** 2,
+    "ease-in-out": lambda x: x * x * (3 - 2 * x),
+}
+MAX_STEPS = 16  # of a custom effect
 
 
 async def play(
@@ -128,20 +137,26 @@ def fade(start: Color, end: Color, duration: float) -> Effect:
 
 
 def sequence(
-    steps: Sequence[tuple[Color, float] | tuple[Color, float, float]],
+    steps: Sequence[tuple[Color, float] | tuple[Color, float, float] | tuple[Color, float, float, str]],
     *,
     loop: bool = True,
 ) -> Effect:
     """A custom colour sequence with custom timing.
 
-    Each step is ``(color, hold)`` or ``(color, hold, fade_in)``: the light blends
-    from the previous step's colour over ``fade_in`` seconds, then holds for
-    ``hold`` seconds.
+    Each step is ``(color, hold)``, ``(color, hold, fade_in)`` or
+    ``(color, hold, fade_in, easing)``: the light blends from the previous step's
+    colour over ``fade_in`` seconds, then holds for ``hold`` seconds. ``easing``
+    names one of :data:`EASINGS` and shapes the blend; it is linear otherwise.
     """
     if not steps:
         raise ValueError("sequence needs at least one step")
-    normalized = [(s[0], float(s[1]), float(s[2]) if len(s) > 2 else 0.0) for s in steps]
-    total = sum(hold + fade_in for _, hold, fade_in in normalized)
+    normalized = []
+    for step in steps:
+        easing = step[3] if len(step) > 3 else "linear"
+        if easing not in EASINGS:
+            raise ValueError(f"unknown easing {easing!r}; choose from: {', '.join(EASINGS)}")
+        normalized.append((step[0], float(step[1]), float(step[2]) if len(step) > 2 else 0.0, EASINGS[easing]))
+    total = sum(hold + fade_in for _, hold, fade_in, _ in normalized)
     if total <= 0:
         raise ValueError("sequence must last longer than zero seconds")
 
@@ -152,9 +167,9 @@ def sequence(
             return normalized[-1][0]
         # before the first lap completes there is no previous colour to blend from
         previous = normalized[-1][0] if loop else normalized[0][0]
-        for color, hold, fade_in in normalized:
+        for color, hold, fade_in, ease in normalized:
             if t < fade_in:
-                return previous.mix(color, t / fade_in)
+                return previous.mix(color, ease(t / fade_in))
             t -= fade_in
             if t < hold:
                 return color
@@ -184,3 +199,38 @@ def candle(color: Color = WARM, depth: float = 0.6) -> Effect:
 def palette(colors: Sequence[Color], hold: float = 2.0, fade_in: float = 1.0) -> Effect:
     """Drift through ``colors`` in order, holding each and blending into the next."""
     return sequence([(color, hold, fade_in) for color in colors])
+
+
+_STEP_KEYS = ("color", "hold", "fade", "ease")
+
+
+def custom(steps: Sequence[Mapping[str, Any]], speed: float = 1.0) -> Effect:
+    """A looping sequence described with plain data, as a front end or a file would hold it.
+
+    Each step is ``{"color": ..., "hold": seconds, "fade": seconds, "ease": name}``:
+    the light blends into ``color`` over ``fade`` seconds, shaped by ``ease`` (one
+    of :data:`EASINGS`), then holds it. Only the colour is required. ``speed``
+    multiplies the pace of the whole sequence.
+    """
+    if speed <= 0:
+        raise ValueError("speed must be positive")
+    if len(steps) > MAX_STEPS:
+        raise ValueError(f"a custom effect takes at most {MAX_STEPS} steps")
+    parsed = []
+    for number, step in enumerate(steps, 1):
+        if not isinstance(step, Mapping):
+            raise ValueError(f"step {number} must be an object with a color")
+        for key in step:
+            if key not in _STEP_KEYS:
+                raise ValueError(f"step {number} has no {key!r}; it takes: {', '.join(_STEP_KEYS)}")
+        if step.get("color") is None:
+            raise ValueError(f"step {number} needs a color")
+        color = step["color"]
+        hold, fade_in = float(step.get("hold", 1.0)), float(step.get("fade", 0.0))
+        if hold < 0 or fade_in < 0:
+            raise ValueError(f"hold and fade of step {number} must not be negative")
+        parsed.append(
+            (color if isinstance(color, Color) else parse_color(str(color)), hold, fade_in, step.get("ease", "linear"))
+        )
+    played = sequence(parsed)
+    return lambda t: played(t * speed)

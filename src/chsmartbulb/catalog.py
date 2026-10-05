@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -43,7 +44,12 @@ _RANGES: dict[str, tuple[float, float, float]] = {
     "smoothing": (0.0, 2.0, 0.05),
     "white": (0.0, 1.0, 0.01),
     "balance": (0.0, 1.0, 0.01),
+    "speed": (0.1, 5.0, 0.1),
 }
+
+_CUSTOM_STEPS = tuple(
+    {"color": color, "hold": 1.0, "fade": 1.0, "ease": "ease-in-out"} for color in ("#ff0000", "#ff8000", "#0040ff")
+)
 
 
 def _police(period: float) -> Effect:
@@ -63,6 +69,12 @@ _ENTRIES = [
         {"colors": (RED, GREEN, BLUE), "hold": 2.0, "fade_in": 1.0},
     ),
     EffectInfo("police", "alternate red and blue", _police, {"period": 1.0}),
+    EffectInfo(
+        "custom",
+        "your own colours, timings and fades",
+        effects.custom,
+        {"steps": _CUSTOM_STEPS, "speed": 1.0},
+    ),
     EffectInfo(
         "music",
         "flash on the beat of the computer's audio",
@@ -117,6 +129,15 @@ def _coerce(key: str, default: Any, value: Any) -> Any:
         if not colors:
             raise ValueError("colors must not be empty")
         return colors
+    if key == "steps":
+        if isinstance(value, str):  # from the command line
+            try:
+                value = json.loads(value)
+            except ValueError:
+                value = None
+        if not isinstance(value, (list, tuple)):
+            raise ValueError("steps must be a list of steps, as JSON when given as text")
+        return tuple(value)  # the effect checks each step when it is built
     if isinstance(default, float) and not isinstance(value, bool):
         try:
             return float(value)
@@ -167,6 +188,8 @@ def _plain(value: Any) -> Any:
 def _schema(info: EffectInfo, key: str, default: Any) -> dict[str, Any]:
     if key == "colors":
         return {"type": "colors"}
+    if key == "steps":
+        return {"type": "steps", "most": effects.MAX_STEPS, "easings": list(effects.EASINGS)}
     if key == "color" or isinstance(default, Color):
         return {"type": "color", "optional": default is None}
     low, high, step = (info.ranges or {}).get(key) or _RANGES[key]
