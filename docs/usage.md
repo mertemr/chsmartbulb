@@ -94,6 +94,15 @@ again at once. The same warning applies
 as for `--listen`: nothing is encrypted, so keep it to a network you trust. `--web 127.0.0.1:8378`
 limits it to the machine itself.
 
+`--web-no-token` drops the token for the web interface only, so the page opens straight away for
+anyone who can reach it. The `--listen` port still asks for one.
+
+What the light does is one of five modes, and choosing something in a mode switches to it: a
+steady colour, a pattern that runs on time alone, an effect that follows the sound, one that
+follows the screen, or an effect built into the bulb. The sound and screen modes say whose sound
+or screen is being followed and how to bring an agent in; the device section lists every
+connection, agents and other open pages included.
+
 The page is a static bundle of about 30 kB that holds no logic of the service. It is built from
 [`web/`](../web) (Svelte, Tailwind) and the result is kept in `src/chsmartbulb/webui`, so nothing
 but Python is needed to run it. To work on it:
@@ -167,12 +176,14 @@ Commands: `status`, `on`, `off`, `color`, `brightness`, `effect`, `native`, `sto
 A request may carry an `"id"` of its own choosing, which the reply repeats. After
 `{"cmd": "subscribe"}`, whose reply holds the current state, the service sends
 `{"event": "state", "connected": ..., "link": ..., "problem": ..., "playing": ..., "on": ...,
-"color": ..., "brightness": ..., "effect": ..., "native": ..., "audio": ..., "screen": ...}`
+"color": ..., "brightness": ..., "effect": ..., "native": ..., "audio": ..., "screen": ...,
+"agents": {"audio": 0, "screen": 0}, "watchers": 1}`
 whenever any of it changes. A client that falls behind gets the latest state, not a backlog.
 
 `link` is `connected`, `connecting` or `waiting` (between attempts), and `problem` is why the
 last attempt failed. While the bulb is away the rest of the state is what it will be given when
-it returns. `reconnect` makes the service try at once instead of waiting out its retry delay.
+it returns. `agents` counts the connected agents of each kind and `watchers` the subscribed
+clients. `reconnect` makes the service try at once instead of waiting out its retry delay.
 
 `effects` lists each effect with its default `params` and a `schema` per parameter
 (`{"type": "number", "min", "max", "step"}`, `{"type": "color", "optional"}` or
