@@ -268,3 +268,55 @@ def test_requests_travel_over_the_socket_and_the_cli_uses_it(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "bulb:       connected" in out
     assert "colour:     #010203" in out
+
+
+def test_effects_reply_describes_every_parameter_and_the_native_effects():
+    async def scenario():
+        daemon = await attached(FakeBulbTransport())
+        reply = await daemon.handle({"cmd": "effects"})
+        breathe = next(info for info in reply["effects"] if info["name"] == "breathe")
+        assert breathe["schema"]["color"] == {"type": "color", "optional": False}
+        assert breathe["schema"]["period"] == {"type": "number", "min": 0.2, "max": 60.0, "step": 0.1}
+        assert "breathing" in reply["native"]["names"]
+        assert "fixed" not in reply["native"]["names"]
+        assert reply["native"]["speed"] == [0, 15]
+        await daemon.close()
+
+    run(scenario())
+
+
+def test_subscribers_hear_each_change_once():
+    async def scenario():
+        daemon = await attached(FakeBulbTransport())
+        heard = []
+        unsubscribe = daemon.subscribe(heard.append)
+        await daemon.handle({"cmd": "color", "color": "#00ff00"})
+        assert [(state["color"], state["on"], state["connected"]) for state in heard] == [("#00ff00", True, True)]
+        await daemon.handle({"cmd": "color", "color": "#00ff00"})  # nothing changed
+        await daemon.handle({"cmd": "status"})
+        assert len(heard) == 1
+        await daemon.handle({"cmd": "effect", "name": "hue", "duration": 0.02})
+        assert (heard[-1]["playing"], heard[-1]["effect"]["name"]) == (True, "hue")
+        await until(lambda: heard[-1]["effect"] is None)  # the effect ran out by itself
+        assert not heard[-1]["playing"]
+        unsubscribe()
+        await daemon.handle({"cmd": "off"})
+        assert heard[-1]["on"]
+        await daemon.close()
+
+    run(scenario())
+
+
+def test_state_is_written_once_after_a_burst_of_changes(tmp_path):
+    state_path = tmp_path / "state.json"
+
+    async def scenario():
+        daemon = await attached(FakeBulbTransport(), state_path=state_path, save_delay=0.05)
+        for color in ("#010000", "#020000", "#030000"):
+            await daemon.handle({"cmd": "color", "color": color})
+        assert not state_path.exists()  # dragging a slider must not hammer the disk
+        await until(state_path.exists)
+        assert json.loads(state_path.read_text())["color"] == "#030000"
+        await daemon.close()
+
+    run(scenario())

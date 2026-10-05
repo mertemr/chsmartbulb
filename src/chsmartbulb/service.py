@@ -2,7 +2,8 @@
 
 Requests and replies are JSON objects, one per line, over a Unix socket and,
 optionally, over TCP for other machines (those must present a token first). The
-same :meth:`BulbService.handle` also serves the command line when no service is
+web interface speaks the same objects over a WebSocket. The same
+:meth:`BulbService.handle` also serves the command line when no service is
 running.
 """
 
@@ -24,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import catalog, effects
 from . import protocol as p
+from . import web as _web
 from .client import is_running
 from .color import WHITE, Color, parse_color
 from .errors import ConnectionFailed, NotConnected, SmartBulbError, TransportError
@@ -35,6 +37,8 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
 
     from .bulb import ChSmartBulb
+
+    Listener = Callable[[dict[str, Any]], None]
 
 log = logging.getLogger(__name__)
 
@@ -107,6 +111,7 @@ class BulbService:
         fps: float = effects.DEFAULT_FPS,
         retry_delay: float = 5.0,
         poll_interval: float = 2.0,
+        save_delay: float = 1.0,
         music_factory: Callable[[], AudioSource] = MusicSource,
         screen_factory: Callable[[], ScreenSource] = ScreenCapture,
     ) -> None:
@@ -115,6 +120,10 @@ class BulbService:
         self._fps = fps
         self._retry_delay = retry_delay
         self._poll_interval = poll_interval
+        self._save_delay = save_delay
+        self._pending_save: asyncio.TimerHandle | None = None
+        self._listeners: set[Listener] = set()
+        self._told: dict[str, Any] | None = None  # the state the listeners last heard
         self._feeds = {
             "audio": _Feed(RemoteAudio(), music_factory),
             "screen": _Feed(RemoteScreen(), screen_factory),
@@ -125,6 +134,7 @@ class BulbService:
         self._lock = asyncio.Lock()  # one request changes the plan at a time
         self._supervisor: asyncio.Task[None] | None = None
         self.tcp_address: tuple[str, int] | None = None
+        self.web_address: tuple[str, int] | None = None
         self._commands: dict[str, Callable[[Mapping[str, Any]], Awaitable[dict[str, Any]]]] = {
             "status": self._status,
             "on": self._on,
@@ -161,6 +171,7 @@ class BulbService:
                 await supervisor
         await self._stop_effect()
         await self._bulb.disconnect()
+        self._write_state()
 
     async def wait_effect(self) -> None:
         """Wait until the running effect ends by itself."""
@@ -174,6 +185,7 @@ class BulbService:
     async def _supervise(self) -> None:
         delay = self._retry_delay
         while True:
+            self._notify()  # a link that dropped by itself shows up here
             if self._bulb.is_connected:
                 await asyncio.sleep(self._poll_interval)
                 continue
@@ -208,8 +220,15 @@ class BulbService:
         self._adopt_on_connect = False
 
     def _save(self) -> None:
-        if self._state_path is None:
+        """Write the plan soon. Changes that follow closely, as from a dragged slider, share one write."""
+        if self._state_path is not None and self._pending_save is None:
+            self._pending_save = asyncio.get_running_loop().call_later(self._save_delay, self._write_state)
+
+    def _write_state(self) -> None:
+        pending, self._pending_save = self._pending_save, None
+        if pending is None or self._state_path is None:
             return
+        pending.cancel()
         try:
             self._state_path.parent.mkdir(parents=True, exist_ok=True)
             self._state_path.write_text(json.dumps(self._plan.to_json(), indent=2) + "\n")
@@ -240,6 +259,32 @@ class BulbService:
     async def _link_lost(self, exc: Exception) -> None:
         log.info("lost the bulb: %s", exc)
         await self._bulb.disconnect()
+        self._notify()
+
+    # --- listeners --------------------------------------------------------------------
+
+    def subscribe(self, listener: Listener) -> Callable[[], None]:
+        """Call ``listener`` with the state whenever it changes; returns the way to stop that."""
+        self._listeners.add(listener)
+        self._told = self._state()
+        return functools.partial(self._listeners.discard, listener)
+
+    def _state(self) -> dict[str, Any]:
+        return {
+            "connected": self._bulb.is_connected,
+            "playing": self._playing,
+            **{kind: "agent" if feed.agents else "local" for kind, feed in self._feeds.items()},
+            **self._plan.to_json(),
+        }
+
+    def _notify(self) -> None:
+        if not self._listeners:
+            return
+        state = self._state()
+        if state != self._told:
+            self._told = state
+            for listener in tuple(self._listeners):
+                listener(state)
 
     async def _commit(self, *, fade: bool = False, duration: float | None = None) -> None:
         self._adopt_on_connect = False  # a request made while the bulb is away wins over what it shows later
@@ -263,6 +308,7 @@ class BulbService:
             sources[needs] = feed.active
         effect = catalog.create(spec["name"], spec.get("params"), **sources)
         self._effect_task = asyncio.create_task(self._run_effect(effect, duration))
+        self._effect_task.add_done_callback(lambda _task: self._notify())
 
     async def _release_sources(self) -> None:
         for feed in self._feeds.values():
@@ -302,6 +348,7 @@ class BulbService:
             self._feeds[kind].agents += 1
             log.info("%s agent connected", kind)
             await self._feed_changed(kind)
+        self._notify()
 
     async def _agent_left(self, kind: str) -> None:
         async with self._lock:
@@ -311,6 +358,7 @@ class BulbService:
             if not feed.agents:
                 feed.remote.clear()
                 await self._feed_changed(kind)
+        self._notify()
 
     def _push(self, kind: str, request: Mapping[str, Any]) -> None:
         if kind == "audio":
@@ -357,6 +405,8 @@ class BulbService:
         except (SmartBulbError, ValueError, KeyError, TypeError) as exc:
             message = f"missing field {exc}" if isinstance(exc, KeyError) else str(exc)
             return {"ok": False, "error": message}
+        finally:
+            self._notify()
 
     def _require_link(self) -> None:
         if not self._bulb.is_connected:
@@ -370,12 +420,7 @@ class BulbService:
             self._plan.brightness = float(level)
 
     async def _status(self, request: Mapping[str, Any]) -> dict[str, Any]:
-        reply: dict[str, Any] = {
-            "connected": self._bulb.is_connected,
-            "playing": self._playing,
-            **{kind: "agent" if feed.agents else "local" for kind, feed in self._feeds.items()},
-            **self._plan.to_json(),
-        }
+        reply = self._state()
         if self._bulb.is_connected:
             try:
                 reply["bulb"] = (await self._bulb.get_light_state()).color.to_hex()
@@ -451,7 +496,8 @@ class BulbService:
         return {}
 
     async def _effects(self, request: Mapping[str, Any]) -> dict[str, Any]:
-        return {"effects": catalog.describe()}
+        names = [effect.name.lower() for effect in NativeEffect if effect is not NativeEffect.FIXED]
+        return {"effects": catalog.describe(), "native": {"names": names, "speed": [0, 15]}}
 
     async def _info(self, request: Mapping[str, Any]) -> dict[str, Any]:
         self._require_link()
@@ -499,14 +545,18 @@ class BulbService:
         socket_path: Path | None,
         *,
         listen: tuple[str, int] | None = None,
+        web: tuple[str, int] | None = None,
+        web_root: Path | None = None,
         token: str | None = None,
     ) -> None:
         """Run until cancelled, answering requests on ``socket_path`` and, if given, on TCP ``listen``.
 
+        ``web`` is where the web interface is served from, with its files taken from ``web_root``.
         Network clients must present ``token``; without one the service refuses to listen on TCP.
         """
-        if listen is not None and not token:
+        if (listen is not None or web is not None) and not token:
             raise SmartBulbError("listening on the network needs a token")
+        site = None if web is None else _web.Site(functools.partial(self.session, token=token), web_root)
         if socket_path is not None and await is_running(socket_path):
             raise SmartBulbError(f"a service is already listening on {socket_path}")
         await self.start()
@@ -525,6 +575,13 @@ class BulbService:
                 host, port = server.sockets[0].getsockname()[:2]
                 self.tcp_address = (host, port)
                 log.info("listening on %s:%s", host, port)
+            if site is not None and web is not None:
+                where = f"{web[0]}:{web[1]}"
+                server = await site.listen(web[0], web[1])
+                servers.append(server)
+                host, port = server.sockets[0].getsockname()[:2]
+                self.web_address = (host, port)
+                log.info("web interface on http://%s:%s", host, port)
         except OSError as exc:
             for server in servers:
                 server.close()
@@ -550,11 +607,37 @@ class BulbService:
     async def _serve_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, *, token: str | None = None
     ) -> None:
-        """Serve one connection. ``token`` is what a network client must present first."""
+        """Serve one socket connection. ``token`` is what a network client must present first."""
+
+        async def send(message: Mapping[str, Any]) -> None:
+            writer.write(json.dumps(message).encode() + b"\n")
+            await writer.drain()
+
+        try:
+            await self.session(reader.readline, send, token=token)
+        except ConnectionError:
+            pass
+        finally:
+            writer.close()
+
+    async def session(
+        self,
+        receive: Callable[[], Awaitable[str | bytes | None]],
+        send: Callable[[Mapping[str, Any]], Awaitable[None]],
+        *,
+        token: str | None = None,
+    ) -> None:
+        """Answer one client until ``receive`` runs dry, whatever carries its messages.
+
+        Each message is one JSON object. ``token`` is what the client must present first.
+        """
         trusted = token is None
         feeding: set[str] = set()  # what this connection supplies as an agent
+        watching: asyncio.Task[None] | None = None
+        unsubscribe: Callable[[], None] | None = None
         try:
-            while line := await reader.readline():
+            while line := await receive():
+                request: Any = None
                 try:
                     request = json.loads(line)
                     if not isinstance(request, dict):
@@ -575,18 +658,33 @@ class BulbService:
                             await self._agent_joined(command)
                         self._push(command, request)
                         continue  # an agent's stream is not acknowledged
+                    elif command == "subscribe":
+                        if watching is None:
+                            changed = asyncio.Event()
+                            unsubscribe = self.subscribe(lambda _state, changed=changed: changed.set())
+                            watching = asyncio.create_task(self._report(changed, send))
+                        reply = {"ok": True, **self._state()}
                     else:
                         reply = await self.handle(request)
-                writer.write(json.dumps(reply).encode() + b"\n")
-                await writer.drain()
+                if isinstance(request, dict) and "id" in request:
+                    reply["id"] = request["id"]  # lets a client that also gets events match its replies
+                await send(reply)
                 if not trusted:
                     break
-        except ConnectionError:
-            pass
         finally:
-            writer.close()
+            if watching is not None and unsubscribe is not None:
+                unsubscribe()
+                watching.cancel()
             for kind in feeding:
                 await self._agent_left(kind)
+
+    async def _report(self, changed: asyncio.Event, send: Callable[[Mapping[str, Any]], Awaitable[None]]) -> None:
+        """Send the state after each change. A slow client gets the latest one, not a backlog."""
+        with contextlib.suppress(ConnectionError):
+            while True:
+                await changed.wait()
+                changed.clear()
+                await send({"event": "state", **self._state()})
 
 
 def _prepare_socket_dir(socket_path: Path) -> None:

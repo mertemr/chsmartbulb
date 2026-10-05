@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import catalog, client, effects, service
+from . import catalog, client, effects, service, web
 from . import protocol as p
 from .bulb import ChSmartBulb
 from .color import NAMED, Color, parse_color
@@ -167,14 +167,15 @@ def _remote(args: argparse.Namespace) -> client.Remote:
 
 
 async def _daemon(args: argparse.Namespace) -> None:
-    if args.listen is not None and not args.token:
-        raise SmartBulbError(f"--listen needs a token: use --token or set ${ENV_TOKEN}")
+    for option in ("listen", "web"):
+        if getattr(args, option) is not None and not args.token:
+            raise SmartBulbError(f"--{option} needs a token: use --token or set ${ENV_TOKEN}")
     bulb = _bulb(args, auto_reconnect=False)
     state_path = None if args.no_state else service.default_state_path()
     daemon = service.BulbService(
         bulb, state_path=state_path, fps=args.fps, music_factory=_music(args), screen_factory=_screen(args)
     )
-    await daemon.serve(args.socket, listen=args.listen, token=args.token)
+    await daemon.serve(args.socket, listen=args.listen, web=args.web, token=args.token)
 
 
 async def _agent(args: argparse.Namespace) -> None:
@@ -261,6 +262,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=_listen,
         metavar="[HOST:]PORT",
         help=f"also accept other machines on this address (needs a token; usual port {client.DEFAULT_PORT})",
+    )
+    cmd.add_argument(
+        "--web",
+        type=_listen,
+        metavar="[HOST:]PORT",
+        help=f"also serve the web interface on this address (needs a token; usual port {web.DEFAULT_PORT})",
     )
 
     sub.add_parser("audio-agent", help="analyse this machine's audio and feed it to a service (see --host)")
