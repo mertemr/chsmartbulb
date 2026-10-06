@@ -10,7 +10,8 @@
   const WHAT = { audio: 'sound', screen: 'screen' }
   const agents = $derived(app.state?.agents?.[kind] ?? 0)
   const command = $derived(`chsmartbulb --host ${app.serviceHost}${app.signedIn ? ' --token …' : ''} ${kind}-agent`)
-  const listens = $derived(kind === 'audio' && app.setup?.platform === 'android')
+  // the app listens itself on Android, Linux and Windows
+  const listens = $derived(kind === 'audio' && ['android', 'linux', 'windows'].includes(app.setup?.platform ?? ''))
 </script>
 
 {#if app.mode === 'native'}
@@ -23,8 +24,8 @@
       {#if agents}
         Following the {WHAT[kind]} of another computer{agents > 1 ? ` (${agents} agents)` : ''}.
       {:else if kind === 'audio'}
-        The desktop app does not listen to sound itself yet. Turn on <em>Share on the network</em> under Device and run
-        the Python package’s <code>audio-agent</code> on this or another computer.
+        This app does not listen to sound here. Turn on <em>Share on the network</em> under Device and run the Python
+        package’s <code>audio-agent</code> on a computer.
       {:else}
         The screen effect follows a computer’s screen: turn on <em>Share on the network</em> under Device and run the
         Python package’s <code>screen-agent</code> there.

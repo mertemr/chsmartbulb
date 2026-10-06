@@ -15,6 +15,8 @@ use tauri::{AppHandle, Runtime};
 use crate::models::{likely, AudioInput, AudioRoute, Found, Readiness};
 use crate::{Error, Result};
 
+#[cfg(any(target_os = "linux", windows))]
+mod audio;
 mod ble;
 #[cfg(target_os = "linux")]
 mod rfcomm_linux;
@@ -83,13 +85,19 @@ impl<R: Runtime> Bluetooth<R> {
         }
     }
 
-    /// Desktop sound capture is the Python agent's job for now.
-    pub fn audio_capture(&self, _input: AudioInput) -> Option<Arc<dyn AudioCapture>> {
-        None
+    /// What this computer plays (a loopback of the default output) or its default input.
+    pub fn audio_capture(&self, input: AudioInput) -> Option<Arc<dyn AudioCapture>> {
+        #[cfg(any(target_os = "linux", windows))]
+        return Some(Arc::new(audio::DesktopAudio::new(input)));
+        #[cfg(not(any(target_os = "linux", windows)))]
+        {
+            let _ = input;
+            None
+        }
     }
 
     pub async fn audio_route(&self) -> Result<AudioRoute> {
-        Ok(AudioRoute::default())
+        Ok(AudioRoute { can_capture_playback: cfg!(any(target_os = "linux", windows)), ..AudioRoute::default() })
     }
 
     /// Desktop apps keep running in the background anyway.

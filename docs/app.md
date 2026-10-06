@@ -51,8 +51,10 @@ Where the phone's sound goes is the system's choice, not the app's. On Samsung p
 Bluetooth speakers at once. The *Sound* panel shows the current outputs and links to the
 settings.
 
-The desktop app does not listen to sound itself yet, and the screen effect follows a computer:
-for those, turn on sharing and run the Python package's agents (see below).
+The desktop app listens to what the computer plays, or to its microphone: on Linux through
+`parec` from the default output's monitor (PipeWire and PulseAudio both offer it), on Windows as
+a WASAPI loopback of the default output. The screen effect follows a computer's screen through
+the Python package's `screen-agent`, with sharing turned on (see below).
 
 ## Sharing on the network
 

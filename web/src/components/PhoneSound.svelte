@@ -3,14 +3,16 @@
   import { app } from '../lib/app.svelte'
   import { native, type AudioInput, type AudioRoute } from '../lib/native'
 
-  const INPUTS: { id: AudioInput; name: string; text: string }[] = [
-    {
-      id: 'playback',
-      name: 'What this device plays',
-      text: 'Music and videos, wherever they play: this device’s speaker, headphones or another Bluetooth speaker. Android asks once per session to share the audio.',
-    },
+  const PLAYBACK = {
+    android:
+      'Music and videos, wherever they play: this device’s speaker, headphones or another Bluetooth speaker. Android asks once per session to share the audio.',
+    linux: 'Whatever plays through the default output, taken from its monitor (PipeWire or PulseAudio, with parec).',
+    windows: 'Whatever plays through the default output, as a loopback of it.',
+  } as Record<string, string>
+  const INPUTS = $derived<{ id: AudioInput; name: string; text: string }[]>([
+    { id: 'playback', name: 'What this device plays', text: PLAYBACK[app.setup?.platform ?? ''] ?? '' },
     { id: 'microphone', name: 'Microphone', text: 'The room: a TV, a record player, a party.' },
-  ]
+  ])
 
   let route = $state<AudioRoute | null>(null)
   let saving = $state(false)
@@ -65,7 +67,7 @@
     {/each}
   </div>
 
-  {#if route}
+  {#if route && android}
     <div class="border-line grid gap-2 border-t pt-3">
       <p class="font-medium">Where the sound goes</p>
       <p class="text-muted">
