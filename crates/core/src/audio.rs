@@ -580,6 +580,34 @@ pub fn music_drop(
     }))
 }
 
+/// A calm colour that breathes every `period` seconds, with `accent` flashing on the beats.
+///
+/// Never dark: in silence it is only the breathing.
+pub fn music_ambient(
+    source: Arc<AudioSource>,
+    base: Color,
+    accent: Color,
+    period: f64,
+    decay: f64,
+    delay: f64,
+    sensitivity: f64,
+) -> Result<Effect> {
+    if period <= 0.0 {
+        return Err(invalid("period must be positive"));
+    }
+    if decay <= 0.0 {
+        return Err(invalid("decay must be positive"));
+    }
+    source.set_delay(delay)?;
+    source.set_sensitivity(sensitivity)?;
+    Ok(Box::new(move |t| {
+        let heard = source.heard();
+        let swell = 0.5 - 0.5 * (2.0 * PI * t / period).cos();
+        let flash = (-decay * (heard.now - heard.last_beat)).exp();
+        base.scaled(0.25 + 0.25 * swell).mix(&accent, flash)
+    }))
+}
+
 /// Bass drives red, mids green and treble blue; `release` is the fall rate per second.
 pub fn music_spectrum(source: Arc<AudioSource>, release: f64, delay: f64) -> Result<Effect> {
     source.set_delay(delay)?;
@@ -669,6 +697,7 @@ pub const STEREO_RIGHT: Color = RED;
 mod tests {
     use super::*;
     use crate::color::WHITE;
+    use crate::effects::WARM;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn manual_clock() -> (Clock, Arc<AtomicU64>) {
@@ -952,6 +981,31 @@ mod tests {
             [(0.0, 3.0, 0.0, 0.5), (0.4, 0.0, 0.0, 0.5), (0.4, 3.0, 5.0, 0.5), (0.4, 3.0, 0.0, 2.0)]
         {
             assert!(music_drop(source.clone(), WHITE, flash, build, delay, sensitivity).is_err());
+        }
+    }
+
+    #[test]
+    fn ambient_breathes_and_never_goes_dark() {
+        let (clock, now) = manual_clock();
+        let source = AudioSource::new(clock);
+        let mut effect = music_ambient(source.clone(), Color::rgb(200, 0, 0), BLUE, 6.0, 5.0, 0.0, 0.5).unwrap();
+        assert_eq!(effect(0.0), Color::rgb(50, 0, 0)); // never beat and silent: 200 * 0.25
+        assert_eq!(effect(3.0), Color::rgb(100, 0, 0)); // half way through the swell
+        set(&now, 10.0);
+        source.publish(Levels::default(), 10.0);
+        assert_eq!(effect(3.0), BLUE); // a beat shows the accent
+        set(&now, 20.0);
+        assert_eq!(effect(3.0), Color::rgb(100, 0, 0)); // and the breathing is back
+    }
+
+    #[test]
+    fn ambient_refuses_what_does_not_fit() {
+        let (clock, _) = manual_clock();
+        let source = AudioSource::new(clock);
+        for (period, decay, delay, sensitivity) in
+            [(0.0, 5.0, 0.0, 0.5), (6.0, 0.0, 0.0, 0.5), (6.0, 5.0, 5.0, 0.5), (6.0, 5.0, 0.0, 2.0)]
+        {
+            assert!(music_ambient(source.clone(), WARM, WHITE, period, decay, delay, sensitivity).is_err());
         }
     }
 }

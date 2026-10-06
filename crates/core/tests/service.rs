@@ -255,7 +255,7 @@ async fn effects_reply_describes_every_parameter_and_the_native_effects() {
     let names: Vec<&str> = reply["native"]["names"].as_array().unwrap().iter().map(|n| n.as_str().unwrap()).collect();
     assert!(names.contains(&"breathing") && !names.contains(&"fixed"));
     assert_eq!(reply["native"]["speed"], json!([0, 15]));
-    assert_eq!(reply["effects"].as_array().unwrap().len(), 17);
+    assert_eq!(reply["effects"].as_array().unwrap().len(), 18);
     service.close().await;
 }
 

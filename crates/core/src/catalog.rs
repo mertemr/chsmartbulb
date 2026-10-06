@@ -374,6 +374,33 @@ pub static CATALOG: &[EffectInfo] = &[
         ranges: &[],
     },
     EffectInfo {
+        name: "ambient",
+        summary: "a calm colour that breathes, an accent on the beats; never dark",
+        needs: Some(Needs::Audio),
+        defaults: || {
+            vec![
+                ("base", Param::Color(Some(WARM))),
+                ("accent", Param::Color(Some(WHITE))),
+                ("period", Param::Number(6.0)),
+                ("decay", Param::Number(5.0)),
+                ("delay", Param::Number(0.0)),
+                ("sensitivity", Param::Number(DEFAULT_SENSITIVITY)),
+            ]
+        },
+        build: |p, s| {
+            audio::music_ambient(
+                audio(s, "ambient")?,
+                colour(p, "base"),
+                colour(p, "accent"),
+                n(p, "period"),
+                n(p, "decay"),
+                n(p, "delay"),
+                n(p, "sensitivity"),
+            )
+        },
+        ranges: &[],
+    },
+    EffectInfo {
         name: "screen",
         summary: "follow the colour of the screen",
         needs: Some(Needs::Screen),
@@ -558,7 +585,7 @@ mod tests {
     fn describe_matches_the_python_shape() {
         let described = describe();
         let all = described.as_array().unwrap();
-        assert_eq!(all.len(), 17);
+        assert_eq!(all.len(), 18);
         let music = all.iter().find(|e| e["name"] == "music").unwrap();
         assert_eq!(music["needs"], "audio");
         assert_eq!(music["params"]["color"], Value::Null);

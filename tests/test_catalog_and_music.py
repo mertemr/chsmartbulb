@@ -73,6 +73,7 @@ def test_describe_is_plain_data_covering_every_effect():
         "tempo": "audio",
         "centroid": "audio",
         "drop": "audio",
+        "ambient": "audio",
         "screen": "screen",
     }
 
@@ -814,3 +815,29 @@ def test_drop_refuses_what_does_not_fit():
     for params in ({"flash": 0}, {"build": 0}, {"sensitivity": 2}, {"delay": 5}):
         with pytest.raises(ValueError):
             catalog.create("drop", params, audio=source)
+
+
+def test_ambient_breathes_and_never_goes_dark():
+    source = FakeMusic()
+    ambient = catalog.create(
+        "ambient", {"base": "c80000", "accent": "0000ff", "period": 6.0, "decay": 5.0}, audio=source
+    )
+    assert ambient(0.0) == Color(r=50)  # never beat and silent: 200 * 0.25
+    assert ambient(3.0) == Color(r=100)  # half way through the swell: 200 * 0.5
+    source.beat(at=10.0)
+    source.now = 10.0
+    assert ambient(3.0) == Color(b=255)  # a beat shows the accent
+    source.now = 20.0
+    assert ambient(3.0) == Color(r=100)  # and the breathing is back
+
+
+def test_ambient_refuses_what_does_not_fit():
+    source = FakeMusic()
+    for params, name in (
+        ({"period": 0}, "period"),
+        ({"decay": 0}, "decay"),
+        ({"sensitivity": 2}, "sensitivity"),
+        ({"delay": 5}, "delay"),
+    ):
+        with pytest.raises(ValueError, match=name):
+            catalog.create("ambient", params, audio=source)

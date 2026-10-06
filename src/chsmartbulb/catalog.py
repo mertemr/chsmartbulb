@@ -144,6 +144,20 @@ _ENTRIES = [
         needs="audio",
     ),
     EffectInfo(
+        "ambient",
+        "a calm colour that breathes, an accent on the beats; never dark",
+        music.music_ambient,
+        {
+            "base": effects.WARM,
+            "accent": WHITE,
+            "period": 6.0,
+            "decay": 5.0,
+            "delay": 0.0,
+            "sensitivity": music.DEFAULT_SENSITIVITY,
+        },
+        needs="audio",
+    ),
+    EffectInfo(
         "screen",
         "follow the colour of the screen",
         screen.screen_follow,

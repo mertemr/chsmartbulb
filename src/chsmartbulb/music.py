@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from .color import BLUE, OFF, RED, WHITE, Color
+from .effects import WARM
 from .errors import SmartBulbError
 
 if TYPE_CHECKING:
@@ -728,6 +729,34 @@ def music_drop(
         if t - began < flash:
             return color if ((t - began) * _FLASH_HZ) % 1.0 < 0.5 else OFF
         return color.scaled(0.15 + 0.6 * fast)
+
+    return effect
+
+
+def music_ambient(
+    source: AudioSource,
+    base: Color = WARM,
+    accent: Color = WHITE,
+    period: float = 6.0,
+    decay: float = 5.0,
+    delay: float = 0.0,
+    sensitivity: float = DEFAULT_SENSITIVITY,
+) -> Effect:
+    """A calm colour that breathes every ``period`` seconds, with ``accent`` flashing on the beats.
+
+    Never dark: in silence it is only the breathing.
+    """
+    if period <= 0.0:
+        raise ValueError("period must be positive")
+    if decay <= 0.0:
+        raise ValueError("decay must be positive")
+    _set_delay(source, delay)
+    _check_sensitivity(source, sensitivity)
+
+    def effect(t: float) -> Color:
+        swell = 0.5 - 0.5 * math.cos(2.0 * math.pi * t / period)
+        flash = math.exp(-decay * (source.clock() - source.last_beat))
+        return base.scaled(0.25 + 0.25 * swell).mix(accent, flash)
 
     return effect
 
