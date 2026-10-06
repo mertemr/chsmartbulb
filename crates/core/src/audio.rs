@@ -803,13 +803,12 @@ mod tests {
         assert_eq!(effect(1.0), Color::rgb(255, 0, 0));
         source.publish(Levels { treble: 1.0, ..Levels::default() }, 0.0);
         assert_eq!(effect(1.05), Color::rgb(183, 0, 72));
-        source.publish(Levels { mid: 1.0, ..Levels::default() }, 0.0);
-        let even = effect(101.0); // out of the dark a sound shows where it is at once
-        assert!(100 < even.r && even.r < 160);
-        assert!(100 < even.b && even.b < 160);
         source.publish(Levels::default(), 0.0);
-        let quiet = effect(101.2);
-        assert!(quiet.r > 0 && quiet.b > 0); // silence keeps the position
+        assert_eq!(effect(2.0), OFF); // silence: step 0.95 makes faded 0, position untouched
+        source.publish(Levels { treble: 1.0, ..Levels::default() }, 0.0);
+        assert_eq!(effect(2.05), Color::rgb(0, 0, 255)); // out of the dark, position jumps to target 1.0 at once
+        source.publish(Levels::default(), 0.0);
+        assert_eq!(effect(2.15), Color::rgb(0, 0, 163)); // silence: faded = 0.8, level 0.64, position stays 1.0
     }
 
     #[test]

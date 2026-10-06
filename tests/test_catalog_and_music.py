@@ -748,14 +748,12 @@ def test_centroid_blends_by_where_the_weight_lies():
     assert centroid(1.0) == Color(r=255)  # all bass is the low colour
     source.levels = music.Levels(treble=1.0)
     assert centroid(1.05) == Color(r=183, b=72)  # on its way to the high colour
-    source.levels = music.Levels(mid=1.0)
-    even = centroid(101.0)  # out of the dark a sound shows where it is at once
-    assert 100 < even.r < 160
-    assert 100 < even.b < 160
     source.levels = music.Levels()
-    quiet = centroid(101.2)
-    assert quiet.r > 0
-    assert quiet.b > 0  # silence keeps the position
+    assert centroid(2.0) == Color()  # silence: step 0.95 makes faded 0, position untouched
+    source.levels = music.Levels(treble=1.0)
+    assert centroid(2.05) == Color(b=255)  # out of the dark, position jumps to target 1.0 at once
+    source.levels = music.Levels()
+    assert centroid(2.15) == Color(b=163)  # silence: faded = 0.8, level 0.64, position stays 1.0
 
 
 def test_centroid_refuses_what_does_not_fit():
