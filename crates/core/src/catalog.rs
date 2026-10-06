@@ -85,6 +85,7 @@ fn range(key: &str) -> (f64, f64, f64) {
         "width" => (1.0, 10.0, 0.5),
         "smoothing" => (0.0, 2.0, 0.05),
         "speed" => (0.1, 5.0, 0.1),
+        "step" => (1.0, 180.0, 1.0),
         _ => (0.0, 1.0, 0.01),
     }
 }
@@ -263,6 +264,33 @@ pub static CATALOG: &[EffectInfo] = &[
                 n(p, "width"),
                 n(p, "release"),
                 n(p, "delay"),
+            )
+        },
+        ranges: &[],
+    },
+    EffectInfo {
+        name: "beathue",
+        summary: "the colour turns on every beat, the brightness follows the bass",
+        needs: Some(Needs::Audio),
+        defaults: || {
+            vec![
+                ("step", Param::Number(47.0)),
+                ("decay", Param::Number(5.0)),
+                ("floor", Param::Number(0.1)),
+                ("saturation", Param::Number(1.0)),
+                ("delay", Param::Number(0.0)),
+                ("sensitivity", Param::Number(DEFAULT_SENSITIVITY)),
+            ]
+        },
+        build: |p, s| {
+            audio::music_beathue(
+                audio(s, "beathue")?,
+                n(p, "step"),
+                n(p, "decay"),
+                n(p, "floor"),
+                n(p, "saturation"),
+                n(p, "delay"),
+                n(p, "sensitivity"),
             )
         },
         ranges: &[],
@@ -452,12 +480,15 @@ mod tests {
     fn describe_matches_the_python_shape() {
         let described = describe();
         let all = described.as_array().unwrap();
-        assert_eq!(all.len(), 13);
+        assert_eq!(all.len(), 14);
         let music = all.iter().find(|e| e["name"] == "music").unwrap();
         assert_eq!(music["needs"], "audio");
         assert_eq!(music["params"]["color"], Value::Null);
         assert_eq!(music["schema"]["color"], json!({"type": "color", "optional": true}));
         assert_eq!(music["schema"]["delay"], json!({"type": "number", "min": 0.0, "max": 2.0, "step": 0.01}));
+        let beathue = all.iter().find(|e| e["name"] == "beathue").unwrap();
+        assert_eq!(beathue["needs"], "audio");
+        assert_eq!(beathue["schema"]["step"], json!({"type": "number", "min": 1.0, "max": 180.0, "step": 1.0}));
         let screen = all.iter().find(|e| e["name"] == "screen").unwrap();
         assert_eq!(screen["schema"]["saturation"]["max"], 3.0);
         let custom = all.iter().find(|e| e["name"] == "custom").unwrap();

@@ -500,6 +500,12 @@ def _set_delay(source: AudioSource, delay: float) -> None:
     source.delay = delay
 
 
+def _check_sensitivity(source: AudioSource, sensitivity: float) -> None:
+    if not 0.0 <= sensitivity <= 1.0:
+        raise ValueError("sensitivity must be within 0..1")
+    source.sensitivity = sensitivity
+
+
 def _loudness(levels: Levels) -> float:
     return max(levels.bass, levels.mid, levels.treble)
 
@@ -518,9 +524,7 @@ def music_pulse(
     sets how easily a rise in the bass counts as a beat.
     """
     _set_delay(source, delay)
-    if not 0.0 <= sensitivity <= 1.0:
-        raise ValueError("sensitivity must be within 0..1")
-    source.sensitivity = sensitivity
+    _check_sensitivity(source, sensitivity)
 
     def effect(t: float) -> Color:
         flash = math.exp(-decay * (source.clock() - source.last_beat))
@@ -529,6 +533,40 @@ def music_pulse(
             return OFF  # scaled() never rounds a lit channel to zero, silence should be dark
         base = color if color is not None else Color.from_hsv(source.beats * 47.0)
         return base.scaled(level)
+
+    return effect
+
+
+def music_beathue(
+    source: AudioSource,
+    step: float = 47.0,
+    decay: float = 5.0,
+    floor: float = 0.1,
+    saturation: float = 1.0,
+    delay: float = 0.0,
+    sensitivity: float = DEFAULT_SENSITIVITY,
+) -> Effect:
+    """Turn the colour by ``step`` degrees on every beat; flash and glow with the bass.
+
+    Between beats the light falls to ``floor`` (0..1) of its brightness, never fully dark.
+    """
+    if not 1.0 <= step <= 180.0:
+        raise ValueError("step must be within 1..180 degrees")
+    if decay <= 0.0:
+        raise ValueError("decay must be positive")
+    if not 0.0 <= floor <= 1.0:
+        raise ValueError("floor must be within 0..1")
+    if not 0.0 <= saturation <= 1.0:
+        raise ValueError("saturation must be within 0..1")
+    _set_delay(source, delay)
+    _check_sensitivity(source, sensitivity)
+
+    def effect(t: float) -> Color:
+        flash = math.exp(-decay * (source.clock() - source.last_beat))
+        level = floor + (1.0 - floor) * max(flash, 0.6 * source.levels.bass)
+        if level < _DARK:
+            return OFF
+        return Color.from_hsv(source.beats * step, saturation).scaled(level)
 
     return effect
 

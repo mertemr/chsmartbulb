@@ -45,6 +45,7 @@ _RANGES: dict[str, tuple[float, float, float]] = {
     "white": (0.0, 1.0, 0.01),
     "balance": (0.0, 1.0, 0.01),
     "speed": (0.1, 5.0, 0.1),
+    "step": (1.0, 180.0, 1.0),
 }
 
 _CUSTOM_STEPS = tuple(
@@ -101,6 +102,20 @@ _ENTRIES = [
         "blend two colours by where the sound sits between left and right",
         music.music_stereo,
         {"left": BLUE, "right": RED, "width": 4.0, "release": 3.0, "delay": 0.0},
+        needs="audio",
+    ),
+    EffectInfo(
+        "beathue",
+        "the colour turns on every beat, the brightness follows the bass",
+        music.music_beathue,
+        {
+            "step": 47.0,
+            "decay": 5.0,
+            "floor": 0.1,
+            "saturation": 1.0,
+            "delay": 0.0,
+            "sensitivity": music.DEFAULT_SENSITIVITY,
+        },
         needs="audio",
     ),
     EffectInfo(

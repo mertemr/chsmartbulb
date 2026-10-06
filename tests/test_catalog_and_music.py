@@ -64,7 +64,14 @@ def test_describe_is_plain_data_covering_every_effect():
     breathe = next(entry for entry in listing if entry["name"] == "breathe")
     assert breathe["params"] == {"color": "#ff0000", "period": 4.0, "floor": 0.0}
     needs = {entry["name"]: entry["needs"] for entry in listing if entry["needs"]}
-    assert needs == {"music": "audio", "spectrum": "audio", "volume": "audio", "stereo": "audio", "screen": "screen"}
+    assert needs == {
+        "music": "audio",
+        "spectrum": "audio",
+        "volume": "audio",
+        "stereo": "audio",
+        "beathue": "audio",
+        "screen": "screen",
+    }
 
 
 def test_candle_flickers_within_its_depth_and_palette_blends():
@@ -648,3 +655,24 @@ def test_cli_passes_the_microphone_choice_on():
     args = cli.build_parser().parse_args(["--mic", "audio-agent"])
     assert cli._music(args).keywords["mic"] is True
     assert cli._music(cli.build_parser().parse_args(["audio-agent"])).keywords["mic"] is False
+
+
+def test_beathue_steps_the_hue_and_keeps_a_floor():
+    source = FakeMusic()
+    effect = catalog.create("beathue", {"step": 120, "floor": 0.2, "decay": 5}, audio=source)
+    assert effect(0.0) == Color(r=51)  # never beat and silent: the floor, in the first hue (red)
+    source.beat(at=10.0)
+    source.now = 10.0
+    assert effect(0.0) == Color(g=255)  # one step of 120 degrees is green, at full level
+    source.now = 13.0
+    assert effect(3.0) == Color(g=51)  # decayed to the floor
+    source.beat(at=13.0)
+    assert effect(3.0) == Color(b=255)  # two steps: blue
+
+
+def test_beathue_refuses_what_does_not_fit():
+    source = FakeMusic()
+    bad = ({"step": 0}, {"step": 200}, {"decay": 0}, {"floor": 2}, {"saturation": -1}, {"sensitivity": 2}, {"delay": 5})
+    for params in bad:
+        with pytest.raises(ValueError):
+            catalog.create("beathue", params, audio=source)
