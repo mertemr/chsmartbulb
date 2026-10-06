@@ -37,6 +37,7 @@ IDLE_TIMEOUT = 60.0  # a client silent for this long, pongs included, is gone
 MAX_HEADER = 8192
 MAX_MESSAGE = 65536
 _HEADER_TIMEOUT = 10.0
+_LINGER = 1.0  # seconds to wait for a closing client to hang up
 _WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 # fmt: off
@@ -275,6 +276,16 @@ class Site:
         finally:
             pinging.cancel()
         socket.frame(_CLOSE, code.to_bytes(2, "big"))
+        await writer.drain()
+        # Closing with the client's data unread resets the connection, and the reset can overtake
+        # the close frame; so take what is still coming, briefly, until the client hangs up.
+        with contextlib.suppress(asyncio.TimeoutError, ConnectionError):
+            await asyncio.wait_for(_discard(reader), _LINGER)
+
+
+async def _discard(reader: asyncio.StreamReader) -> None:
+    while await reader.read(65536):
+        pass
 
 
 def _respond(

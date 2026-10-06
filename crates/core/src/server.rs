@@ -31,6 +31,8 @@ const PING_INTERVAL: Duration = Duration::from_secs(20);
 /// A client silent for this long, pongs included, is gone.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const HEADER_TIMEOUT: Duration = Duration::from_secs(10);
+/// Seconds to wait for a closing client to hang up.
+const LINGER: Duration = Duration::from_secs(1);
 const MAX_HEADER: usize = 8192;
 const MAX_MESSAGE: usize = 65536;
 const WEBSOCKET_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -366,6 +368,13 @@ async fn websocket(
     session.close().await;
     if let Some(code) = code {
         let _ = frame(&mut write_half, CLOSE, &code.to_be_bytes()).await;
+        // Closing with the client's data unread resets the connection, and the reset can overtake
+        // the close frame; so take what is still coming, briefly, until the client hangs up.
+        let mut sink = [0u8; 4096];
+        let _ = tokio::time::timeout(LINGER, async {
+            while matches!(frames.read(&mut sink).await, Ok(size) if size > 0) {}
+        })
+        .await;
     }
     Ok(())
 }

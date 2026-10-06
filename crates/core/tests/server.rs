@@ -49,7 +49,13 @@ async fn line_clients_authenticate_then_control_and_follow_the_light() {
 fn masked(text: &str) -> Vec<u8> {
     let payload = text.as_bytes();
     let mask = [1u8, 2, 3, 4];
-    let mut frame = vec![0x81, 0x80 | payload.len() as u8];
+    let mut frame = vec![0x81];
+    if payload.len() < 126 {
+        frame.push(0x80 | payload.len() as u8);
+    } else {
+        frame.push(0x80 | 127);
+        frame.extend_from_slice(&(payload.len() as u64).to_be_bytes());
+    }
     frame.extend_from_slice(&mask);
     frame.extend(payload.iter().enumerate().map(|(i, byte)| byte ^ mask[i % 4]));
     frame
@@ -104,6 +110,18 @@ async fn the_web_port_serves_the_page_and_the_socket_protocol() {
     socket.write_all(&masked(r#"{"cmd": "subscribe", "id": 2}"#)).await.unwrap();
     let subscribed = read_text(&mut socket).await;
     assert_eq!((subscribed["ok"].clone(), subscribed["connected"].clone()), (json!(true), json!(true)));
+
+    // too big a message ends the socket with a reason the client gets to read
+    let mut greedy = TcpStream::connect(web).await.unwrap();
+    greedy.write_all(handshake.as_bytes()).await.unwrap();
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        head.push(greedy.read_u8().await.unwrap());
+    }
+    greedy.write_all(&masked(&"x".repeat(70000))).await.unwrap();
+    let mut close = [0u8; 4];
+    greedy.read_exact(&mut close).await.unwrap();
+    assert_eq!(close, [0x88, 2, 0x03, 0xf1], "close frame with 1009");
 
     let mut foreign = TcpStream::connect(web).await.unwrap();
     let elsewhere = handshake.replace(&format!("Origin: http://{web}"), "Origin: http://evil.example");

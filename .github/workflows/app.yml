@@ -1,13 +1,14 @@
 name: app
 
-# The Rust core's tests, and the app built for Android, Linux and Windows.
+# The Rust core's tests, the Python package's with and without the Rust analysis,
+# and the app built for Android, Linux and Windows.
 # The builds are attached to each run as artifacts.
 
 on:
   push:
-    paths: ["crates/**", "app/**", "web/**", "Cargo.*", ".github/workflows/app.yml"]
+    paths: ["crates/**", "app/**", "web/**", "src/**", "tests/**", "pyproject.toml", "uv.lock", "Cargo.*", ".github/workflows/app.yml"]
   pull_request:
-    paths: ["crates/**", "app/**", "web/**", "Cargo.*", ".github/workflows/app.yml"]
+    paths: ["crates/**", "app/**", "web/**", "src/**", "tests/**", "pyproject.toml", "uv.lock", "Cargo.*", ".github/workflows/app.yml"]
   workflow_dispatch:
 
 concurrency:
@@ -43,6 +44,33 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+
+  python:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: python
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tests with the Python analysis
+        run: |
+          uv sync --python-preference system
+          uv run ruff check
+          uv run pytest -q
+      - name: Tests with the Rust analysis
+        run: |
+          uv pip install ./crates/python
+          uv run python -c "import chsmartbulb_native; print(chsmartbulb_native.__version__)"
+          uv run pytest -q
 
   android:
     runs-on: ubuntu-24.04

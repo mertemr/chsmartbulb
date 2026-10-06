@@ -244,6 +244,10 @@ impl Analyzer {
         self.channels
     }
 
+    pub fn block(&self) -> usize {
+        self.block
+    }
+
     /// Consume interleaved samples; returns each analysed block as levels and onset strength.
     pub fn feed(&mut self, pcm: &[i16]) -> Vec<(Levels, f64)> {
         self.pending.extend_from_slice(pcm);

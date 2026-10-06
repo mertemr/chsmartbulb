@@ -1,0 +1,18 @@
+[package]
+name = "chsmartbulb-native"
+description = "Python bindings to the Rust core of chsmartbulb: frame codec, sound analysis, effect catalog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "chsmartbulb_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+chsmartbulb-core.workspace = true
+pyo3 = { version = "0.29", features = ["abi3-py310"] }
+serde_json.workspace = true

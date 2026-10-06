@@ -75,6 +75,17 @@ that behaves like the real one. The same simulation runs the Rust tests, and
 While a bulb is connected, Android shows a quiet notification. It keeps the app running, so
 effects keep playing with the screen off.
 
+## Python bindings
+
+[`crates/python`](../crates/python) builds `chsmartbulb-native`, the Rust core for Python. When
+it is installed, the `chsmartbulb` package analyses sound in Rust: the audio agent and the
+sound-reactive effects then need no numpy, and the Python and Rust services are certain to hear
+music the same way (a test compares the two block by block). Without it nothing changes.
+
+```bash
+pip install "chsmartbulb-native @ git+https://github.com/mertemr/chsmartbulb#subdirectory=crates/python"
+```
+
 ## Building
 
 The APK, the Linux bundles (AppImage, deb, rpm) and the Windows installers are built by the
