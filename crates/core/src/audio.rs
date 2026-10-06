@@ -13,7 +13,7 @@ use std::time::Instant;
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 
-use crate::color::{Color, BLUE, OFF, RED};
+use crate::color::{Color, BLUE, OFF, RED, WHITE};
 use crate::effects::Effect;
 use crate::error::{invalid, Result};
 
@@ -47,6 +47,17 @@ const TEMPO_INTERVALS: (f64, f64) = (0.25, 1.5);
 const TEMPO_BLEND: f64 = 0.3;
 /// Brightness falls this much per second.
 const TEMPO_RELEASE: f64 = 3.0;
+/// Seconds; the long average the lull is measured against.
+const DROP_SLOW: f64 = 8.0;
+/// A lull: the short average under this share of the long one.
+const LULL_RATIO: f64 = 0.35;
+/// And the long one above this, so there was something to fall from.
+const LULL_FLOOR: f64 = 0.05;
+/// Seconds a lull must last.
+const LULL_HOLD: f64 = 0.5;
+/// A drop's beat must be this loud.
+const DROP_ENERGY: f64 = 0.6;
+const FLASH_HZ: f64 = 8.0;
 
 /// A source of seconds on a steady time base.
 pub type Clock = Arc<dyn Fn() -> f64 + Send + Sync>;
@@ -511,6 +522,64 @@ pub fn music_centroid(
     }))
 }
 
+/// Open up as the music builds and flash when it comes back in after a lull.
+///
+/// `build` is the seconds the light takes to follow the energy, `flash` how long the flash
+/// lasts. The thresholds are tuned on synthetic music, not on real tracks.
+pub fn music_drop(
+    source: Arc<AudioSource>,
+    color: Color,
+    flash: f64,
+    build: f64,
+    delay: f64,
+    sensitivity: f64,
+) -> Result<Effect> {
+    if flash <= 0.0 {
+        return Err(invalid("flash must be positive"));
+    }
+    if build <= 0.0 {
+        return Err(invalid("build must be positive"));
+    }
+    source.set_delay(delay)?;
+    source.set_sensitivity(sensitivity)?;
+    let mut fast = 0.0f64;
+    let mut slow = 0.0f64;
+    let mut lull = 0.0f64;
+    let mut lulled = false;
+    let mut seen = source.heard().beats;
+    let mut began = f64::NEG_INFINITY;
+    let mut last = 0.0;
+    Ok(Box::new(move |t| {
+        let step = (t - last).max(0.0);
+        last = t;
+        let heard = source.heard();
+        let energy = heard.levels.loudness();
+        fast += (energy - fast) * (1.0 - (-step / build).exp());
+        slow += (energy - slow) * (1.0 - (-step / DROP_SLOW).exp());
+        if slow > LULL_FLOOR && fast < LULL_RATIO * slow {
+            lull += step;
+            if lull >= LULL_HOLD {
+                lulled = true;
+            }
+        } else {
+            lull = 0.0;
+            if fast >= slow {
+                lulled = false; // the music came back gently: a later beat is not a drop
+            }
+        }
+        let arrived = heard.beats != seen;
+        seen = heard.beats;
+        if arrived && lulled && energy >= DROP_ENERGY {
+            lulled = false;
+            began = t;
+        }
+        if t - began < flash {
+            return if ((t - began) * FLASH_HZ).rem_euclid(1.0) < 0.5 { color } else { OFF };
+        }
+        color.scaled(0.15 + 0.6 * fast)
+    }))
+}
+
 /// Bass drives red, mids green and treble blue; `release` is the fall rate per second.
 pub fn music_spectrum(source: Arc<AudioSource>, release: f64, delay: f64) -> Result<Effect> {
     source.set_delay(delay)?;
@@ -817,5 +886,71 @@ mod tests {
         let source = AudioSource::new(clock);
         assert!(music_centroid(source.clone(), RED, BLUE, 0.0, 3.0, 0.0).is_err());
         assert!(music_centroid(source.clone(), RED, BLUE, 2.0, 3.0, 5.0).is_err());
+    }
+
+    fn advance(effect: &mut Effect, t: &mut f64, seconds: f64) -> Color {
+        let mut frame = OFF;
+        for _ in 0..(seconds / 0.05).round() as usize {
+            *t += 0.05;
+            frame = effect(*t);
+        }
+        frame
+    }
+
+    #[test]
+    fn drop_flashes_when_the_music_comes_back_after_a_lull() {
+        let (clock, now) = manual_clock();
+        let source = AudioSource::new(clock);
+        let loud = Levels { bass: 1.0, ..Levels::default() };
+        let green = Color::rgb(0, 255, 0);
+        let mut effect = music_drop(source.clone(), green, 0.4, 3.0, 0.0, 0.5).unwrap();
+        let mut t = 0.0;
+        source.publish(loud, 0.0);
+        advance(&mut effect, &mut t, 20.0); // steady loud music
+        set(&now, t);
+        source.publish(loud, 10.0); // a beat
+        t += 0.05;
+        assert!(effect(t).g < 255); // no drop in steady music
+        set(&now, t);
+        source.publish(Levels::default(), 0.0);
+        let quiet = advance(&mut effect, &mut t, 8.0);
+        assert!(0 < quiet.g && quiet.g < 100); // a dim glow in the lull
+        t += 0.05;
+        set(&now, t);
+        source.publish(loud, 10.0);
+        let began = t;
+        assert_eq!(effect(t), green); // the drop: flash on
+        assert_eq!(effect(began + 0.07), OFF); // and off, at 8 Hz
+        assert!(effect(began + 0.5).g < 255);
+    }
+
+    #[test]
+    fn drop_ignores_music_that_comes_back_gently() {
+        let (clock, now) = manual_clock();
+        let source = AudioSource::new(clock);
+        let loud = Levels { bass: 1.0, ..Levels::default() };
+        let mut effect = music_drop(source.clone(), Color::rgb(0, 255, 0), 0.4, 3.0, 0.0, 0.5).unwrap();
+        let mut t = 0.0;
+        source.publish(loud, 0.0);
+        advance(&mut effect, &mut t, 20.0);
+        source.publish(Levels::default(), 0.0);
+        advance(&mut effect, &mut t, 8.0); // a lull
+        source.publish(Levels { bass: 0.3, ..Levels::default() }, 0.0);
+        advance(&mut effect, &mut t, 30.0); // back, but quietly
+        t += 0.05;
+        set(&now, t);
+        source.publish(loud, 10.0);
+        assert!(effect(t).g < 255); // an ordinary beat much later is not a drop
+    }
+
+    #[test]
+    fn drop_refuses_what_does_not_fit() {
+        let (clock, _) = manual_clock();
+        let source = AudioSource::new(clock);
+        for (flash, build, delay, sensitivity) in
+            [(0.0, 3.0, 0.0, 0.5), (0.4, 0.0, 0.0, 0.5), (0.4, 3.0, 5.0, 0.5), (0.4, 3.0, 0.0, 2.0)]
+        {
+            assert!(music_drop(source.clone(), WHITE, flash, build, delay, sensitivity).is_err());
+        }
     }
 }

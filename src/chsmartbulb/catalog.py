@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from . import effects, music, screen
-from .color import BLUE, GREEN, RED, Color, parse_color
+from .color import BLUE, GREEN, RED, WHITE, Color, parse_color
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -48,6 +48,8 @@ _RANGES: dict[str, tuple[float, float, float]] = {
     "step": (1.0, 180.0, 1.0),
     "slow": (40.0, 240.0, 1.0),
     "fast": (40.0, 240.0, 1.0),
+    "flash": (0.1, 2.0, 0.05),
+    "build": (0.5, 10.0, 0.5),
 }
 
 _CUSTOM_STEPS = tuple(
@@ -132,6 +134,13 @@ _ENTRIES = [
         "blend two colours by whether the sound is bass-heavy or bright",
         music.music_centroid,
         {"low": RED, "high": BLUE, "width": 2.0, "release": 3.0, "delay": 0.0},
+        needs="audio",
+    ),
+    EffectInfo(
+        "drop",
+        "opens up as the music builds, flashes when it drops back in",
+        music.music_drop,
+        {"color": WHITE, "flash": 0.4, "build": 3.0, "delay": 0.0, "sensitivity": music.DEFAULT_SENSITIVITY},
         needs="audio",
     ),
     EffectInfo(

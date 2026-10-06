@@ -9,7 +9,7 @@ use std::sync::Arc;
 use serde_json::{json, Map, Value};
 
 use crate::audio::{self, AudioSource, DEFAULT_SENSITIVITY, MAX_DELAY};
-use crate::color::{parse_color, Color, BLUE, GREEN, RED};
+use crate::color::{parse_color, Color, BLUE, GREEN, RED, WHITE};
 use crate::effects::{self, Effect, EASINGS, MAX_STEPS, WARM};
 use crate::error::{invalid, Result};
 use crate::screen::{self, ScreenSource};
@@ -87,6 +87,8 @@ fn range(key: &str) -> (f64, f64, f64) {
         "speed" => (0.1, 5.0, 0.1),
         "step" => (1.0, 180.0, 1.0),
         "slow" | "fast" => (40.0, 240.0, 1.0),
+        "flash" => (0.1, 2.0, 0.05),
+        "build" => (0.5, 10.0, 0.5),
         _ => (0.0, 1.0, 0.01),
     }
 }
@@ -347,6 +349,31 @@ pub static CATALOG: &[EffectInfo] = &[
         ranges: &[],
     },
     EffectInfo {
+        name: "drop",
+        summary: "opens up as the music builds, flashes when it drops back in",
+        needs: Some(Needs::Audio),
+        defaults: || {
+            vec![
+                ("color", Param::Color(Some(WHITE))),
+                ("flash", Param::Number(0.4)),
+                ("build", Param::Number(3.0)),
+                ("delay", Param::Number(0.0)),
+                ("sensitivity", Param::Number(DEFAULT_SENSITIVITY)),
+            ]
+        },
+        build: |p, s| {
+            audio::music_drop(
+                audio(s, "drop")?,
+                colour(p, "color"),
+                n(p, "flash"),
+                n(p, "build"),
+                n(p, "delay"),
+                n(p, "sensitivity"),
+            )
+        },
+        ranges: &[],
+    },
+    EffectInfo {
         name: "screen",
         summary: "follow the colour of the screen",
         needs: Some(Needs::Screen),
@@ -531,7 +558,7 @@ mod tests {
     fn describe_matches_the_python_shape() {
         let described = describe();
         let all = described.as_array().unwrap();
-        assert_eq!(all.len(), 16);
+        assert_eq!(all.len(), 17);
         let music = all.iter().find(|e| e["name"] == "music").unwrap();
         assert_eq!(music["needs"], "audio");
         assert_eq!(music["params"]["color"], Value::Null);

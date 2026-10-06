@@ -25,7 +25,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
-from .color import BLUE, OFF, RED, Color
+from .color import BLUE, OFF, RED, WHITE, Color
 from .errors import SmartBulbError
 
 if TYPE_CHECKING:
@@ -55,6 +55,12 @@ _TEMPO_FAST = Color(g=160, b=255)
 _TEMPO_INTERVALS = (0.25, 1.5)  # seconds between beats that count as a tempo, 240 to 40 bpm
 _TEMPO_BLEND = 0.3  # share of a new interval in the estimate
 _TEMPO_RELEASE = 3.0  # brightness falls this much per second
+_DROP_SLOW = 8.0  # seconds; the long average the lull is measured against
+_LULL_RATIO = 0.35  # a lull: the short average under this share of the long one
+_LULL_FLOOR = 0.05  # and the long one above this, so there was something to fall from
+_LULL_HOLD = 0.5  # seconds a lull must last
+_DROP_ENERGY = 0.6  # a drop's beat must be this loud
+_FLASH_HZ = 8.0
 _PAN_SMOOTHING = 0.15  # seconds for the stereo position to settle
 _DARK = 1 / 255
 MAX_DELAY = 2.0
@@ -668,6 +674,60 @@ def music_centroid(
         shown = max(_loudness(levels), faded)
         level = shown * shown
         return low.mix(high, position).scaled(level) if level >= _DARK else OFF
+
+    return effect
+
+
+def music_drop(
+    source: AudioSource,
+    color: Color = WHITE,
+    flash: float = 0.4,
+    build: float = 3.0,
+    delay: float = 0.0,
+    sensitivity: float = DEFAULT_SENSITIVITY,
+) -> Effect:
+    """Open up as the music builds and flash when it comes back in after a lull.
+
+    ``build`` is the seconds the light takes to follow the energy, ``flash`` how long the flash lasts.
+    The thresholds are tuned on synthetic music, not on real tracks.
+    """
+    if flash <= 0.0:
+        raise ValueError("flash must be positive")
+    if build <= 0.0:
+        raise ValueError("build must be positive")
+    _set_delay(source, delay)
+    _check_sensitivity(source, sensitivity)
+    fast = 0.0
+    slow = 0.0
+    lull = 0.0
+    lulled = False
+    seen = source.beats
+    began = -math.inf
+    last = 0.0
+
+    def effect(t: float) -> Color:
+        nonlocal fast, slow, lull, lulled, seen, began, last
+        step = max(0.0, t - last)
+        last = t
+        energy = _loudness(source.levels)
+        fast += (energy - fast) * (1.0 - math.exp(-step / build))
+        slow += (energy - slow) * (1.0 - math.exp(-step / _DROP_SLOW))
+        if slow > _LULL_FLOOR and fast < _LULL_RATIO * slow:
+            lull += step
+            if lull >= _LULL_HOLD:
+                lulled = True
+        else:
+            lull = 0.0
+            if fast >= slow:
+                lulled = False  # the music came back gently: a later beat is not a drop
+        arrived = source.beats != seen
+        seen = source.beats
+        if arrived and lulled and energy >= _DROP_ENERGY:
+            lulled = False
+            began = t
+        if t - began < flash:
+            return color if ((t - began) * _FLASH_HZ) % 1.0 < 0.5 else OFF
+        return color.scaled(0.15 + 0.6 * fast)
 
     return effect
 

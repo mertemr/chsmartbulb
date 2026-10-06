@@ -72,6 +72,7 @@ def test_describe_is_plain_data_covering_every_effect():
         "beathue": "audio",
         "tempo": "audio",
         "centroid": "audio",
+        "drop": "audio",
         "screen": "screen",
     }
 
@@ -762,3 +763,54 @@ def test_centroid_refuses_what_does_not_fit():
         catalog.create("centroid", {"width": 0}, audio=source)
     with pytest.raises(ValueError, match="delay"):
         catalog.create("centroid", {"delay": 5}, audio=source)
+
+
+def advance(effect, t, seconds, step=0.05):
+    """Run an effect for ``seconds`` in frames of ``step``; return the time and the last frame."""
+    frame = None
+    for _ in range(round(seconds / step)):
+        t += step
+        frame = effect(t)
+    return t, frame
+
+
+def test_drop_flashes_when_the_music_comes_back_after_a_lull():
+    source = FakeMusic()
+    effect = catalog.create("drop", {"color": "00ff00", "flash": 0.4, "build": 3.0}, audio=source)
+    source.levels = music.Levels(bass=1.0)
+    t, _ = advance(effect, 0.0, 20)  # steady loud music
+    source.beat(at=t)
+    t += 0.05
+    assert effect(t).g < 255  # a beat in steady music is no drop
+    source.levels = music.Levels()
+    t, quiet = advance(effect, t, 8)
+    assert 0 < quiet.g < 100  # a dim glow in the lull
+    source.levels = music.Levels(bass=1.0)
+    source.beat(at=t + 0.05)
+    t += 0.05
+    began = t
+    assert effect(t) == Color(g=255)  # the drop: flash on
+    assert effect(began + 0.07) == Color()  # and off, at 8 Hz
+    assert effect(began + 0.5).g < 255  # after the flash it is the music's glow again
+
+
+def test_drop_ignores_music_that_comes_back_gently():
+    source = FakeMusic()
+    effect = catalog.create("drop", {"color": "00ff00"}, audio=source)
+    source.levels = music.Levels(bass=1.0)
+    t, _ = advance(effect, 0.0, 20)
+    source.levels = music.Levels()
+    t, _ = advance(effect, t, 8)  # a lull
+    source.levels = music.Levels(bass=0.3)
+    t, _ = advance(effect, t, 30)  # back, but quietly: no beat, no flash
+    source.levels = music.Levels(bass=1.0)
+    source.beat(at=t + 0.05)
+    t += 0.05
+    assert effect(t).g < 255  # an ordinary beat much later is not a drop
+
+
+def test_drop_refuses_what_does_not_fit():
+    source = FakeMusic()
+    for params in ({"flash": 0}, {"build": 0}, {"sensitivity": 2}, {"delay": 5}):
+        with pytest.raises(ValueError):
+            catalog.create("drop", params, audio=source)
