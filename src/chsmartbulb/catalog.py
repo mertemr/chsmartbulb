@@ -46,6 +46,8 @@ _RANGES: dict[str, tuple[float, float, float]] = {
     "balance": (0.0, 1.0, 0.01),
     "speed": (0.1, 5.0, 0.1),
     "step": (1.0, 180.0, 1.0),
+    "slow": (40.0, 240.0, 1.0),
+    "fast": (40.0, 240.0, 1.0),
 }
 
 _CUSTOM_STEPS = tuple(
@@ -116,6 +118,13 @@ _ENTRIES = [
             "delay": 0.0,
             "sensitivity": music.DEFAULT_SENSITIVITY,
         },
+        needs="audio",
+    ),
+    EffectInfo(
+        "tempo",
+        "warm for slow music, cool for fast, by the gaps between beats",
+        music.music_tempo,
+        {"slow": 80.0, "fast": 160.0, "smoothing": 2.0, "delay": 0.0, "sensitivity": music.DEFAULT_SENSITIVITY},
         needs="audio",
     ),
     EffectInfo(

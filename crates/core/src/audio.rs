@@ -39,6 +39,14 @@ const ONSET_CAP: f64 = 100.0;
 /// Seconds for the stereo position to settle.
 const PAN_SMOOTHING: f64 = 0.15;
 const DARK: f64 = 1.0 / 255.0;
+const TEMPO_SLOW: Color = Color::rgb(255, 60, 0);
+const TEMPO_FAST: Color = Color::rgb(0, 160, 255);
+/// Seconds between beats that count as a tempo: 240 to 40 bpm.
+const TEMPO_INTERVALS: (f64, f64) = (0.25, 1.5);
+/// Share of a new interval in the estimate.
+const TEMPO_BLEND: f64 = 0.3;
+/// Brightness falls this much per second.
+const TEMPO_RELEASE: f64 = 3.0;
 
 /// A source of seconds on a steady time base.
 pub type Clock = Arc<dyn Fn() -> f64 + Send + Sync>;
@@ -396,6 +404,69 @@ pub fn music_beathue(
     }))
 }
 
+/// Warm for slow music, cool for fast; brightness follows the loudness.
+///
+/// The tempo is estimated from the gaps between beats. `slow` and `fast` (bpm) are the
+/// tempos shown as the warm and the cool end, `smoothing` the seconds the colour takes to settle.
+pub fn music_tempo(
+    source: Arc<AudioSource>,
+    slow: f64,
+    fast: f64,
+    smoothing: f64,
+    delay: f64,
+    sensitivity: f64,
+) -> Result<Effect> {
+    if slow >= fast {
+        return Err(invalid("slow must be below fast"));
+    }
+    if smoothing < 0.0 {
+        return Err(invalid("smoothing must not be negative"));
+    }
+    source.set_delay(delay)?;
+    source.set_sensitivity(sensitivity)?;
+    let mut estimate: Option<f64> = None; // seconds between beats
+    let mut previous: Option<f64> = None;
+    let mut seen = 0u64;
+    let mut position = 0.5f64;
+    let mut shown = 0.0f64;
+    let mut last = 0.0;
+    Ok(Box::new(move |t| {
+        let step = (t - last).max(0.0);
+        last = t;
+        let heard = source.heard();
+        if heard.beats != seen {
+            if heard.beats > seen {
+                if let Some(before) = previous {
+                    let interval = (heard.last_beat - before) / (heard.beats - seen) as f64;
+                    if (TEMPO_INTERVALS.0..=TEMPO_INTERVALS.1).contains(&interval) {
+                        estimate = Some(match estimate {
+                            Some(old) => (1.0 - TEMPO_BLEND) * old + TEMPO_BLEND * interval,
+                            None => interval,
+                        });
+                    }
+                }
+            }
+            seen = heard.beats;
+            previous = Some(heard.last_beat);
+        }
+        let target = match estimate {
+            Some(interval) => ((60.0 / interval - slow) / (fast - slow)).clamp(0.0, 1.0),
+            None => 0.5,
+        };
+        if smoothing > 0.0 {
+            position += (target - position) * (1.0 - (-step / smoothing).exp());
+        } else {
+            position = target;
+        }
+        shown = heard.levels.loudness().max(shown - TEMPO_RELEASE * step);
+        let level = shown * shown;
+        if level < DARK {
+            return OFF;
+        }
+        TEMPO_SLOW.mix(&TEMPO_FAST, position).scaled(level)
+    }))
+}
+
 /// Bass drives red, mids green and treble blue; `release` is the fall rate per second.
 pub fn music_spectrum(source: Arc<AudioSource>, release: f64, delay: f64) -> Result<Effect> {
     source.set_delay(delay)?;
@@ -599,6 +670,62 @@ mod tests {
             (47.0, 5.0, 0.1, 1.0, 0.0, 2.0),
         ] {
             assert!(music_beathue(source.clone(), step, decay, floor, saturation, delay, sensitivity).is_err());
+        }
+    }
+
+    #[test]
+    fn tempo_colours_by_how_fast_the_beats_come() {
+        let (clock, now) = manual_clock();
+        let source = AudioSource::new(clock);
+        let loud = Levels { bass: 1.0, ..Levels::default() };
+        let mut effect = music_tempo(source.clone(), 80.0, 120.0, 0.0, 0.0, 0.5).unwrap();
+        set(&now, 10.0);
+        source.publish(loud, 10.0);
+        effect(0.0); // the first beat gives no interval yet
+        set(&now, 10.5);
+        source.publish(loud, 10.0);
+        assert_eq!(effect(0.5), Color::rgb(0, 160, 255)); // 120 bpm is the fast end
+        set(&now, 12.5);
+        source.publish(loud, 10.0); // 2 s apart is no tempo
+        assert_eq!(effect(2.5), Color::rgb(0, 160, 255));
+        set(&now, 30.0);
+        assert_eq!(effect(20.0), Color::rgb(0, 160, 255)); // without beats the estimate holds
+
+        let mut slow = music_tempo(source.clone(), 80.0, 120.0, 0.0, 0.0, 0.5).unwrap();
+        set(&now, 40.0);
+        source.publish(loud, 10.0);
+        slow(0.0);
+        set(&now, 41.0);
+        source.publish(loud, 10.0);
+        assert_eq!(slow(1.0), Color::rgb(255, 60, 0)); // 60 bpm is below slow
+    }
+
+    #[test]
+    fn tempo_reads_beats_that_arrive_between_two_frames() {
+        let (clock, now) = manual_clock();
+        let source = AudioSource::new(clock);
+        let loud = Levels { bass: 1.0, ..Levels::default() };
+        let mut effect = music_tempo(source.clone(), 80.0, 120.0, 0.0, 0.0, 0.5).unwrap();
+        set(&now, 10.0);
+        source.publish(loud, 10.0);
+        effect(0.0);
+        set(&now, 10.5);
+        source.publish(loud, 10.0);
+        set(&now, 11.0);
+        source.publish(loud, 10.0); // two beats before the next frame, 0.5 s apart
+        assert_eq!(effect(1.0), Color::rgb(0, 160, 255));
+    }
+
+    #[test]
+    fn tempo_is_dark_in_silence_and_refuses_what_does_not_fit() {
+        let (clock, _) = manual_clock();
+        let source = AudioSource::new(clock);
+        let mut effect = music_tempo(source.clone(), 80.0, 160.0, 2.0, 0.0, 0.5).unwrap();
+        assert_eq!(effect(0.0), OFF);
+        for (slow, fast, smoothing, sensitivity) in
+            [(120.0, 120.0, 2.0, 0.5), (160.0, 80.0, 2.0, 0.5), (80.0, 160.0, -1.0, 0.5), (80.0, 160.0, 2.0, 2.0)]
+        {
+            assert!(music_tempo(source.clone(), slow, fast, smoothing, 0.0, sensitivity).is_err());
         }
     }
 }

@@ -50,6 +50,11 @@ _ROOM_DOUBLING = 30.0  # seconds for the estimate of that noise to double while 
 _BEAT_GAP = 0.15  # seconds; caps detection at 400 bpm
 _BEAT_FLOOR = 0.05  # a beat needs the bass above this fraction of its recent peak
 _ONSET_CAP = 100.0
+_TEMPO_SLOW = Color(r=255, g=60)
+_TEMPO_FAST = Color(g=160, b=255)
+_TEMPO_INTERVALS = (0.25, 1.5)  # seconds between beats that count as a tempo, 240 to 40 bpm
+_TEMPO_BLEND = 0.3  # share of a new interval in the estimate
+_TEMPO_RELEASE = 3.0  # brightness falls this much per second
 _PAN_SMOOTHING = 0.15  # seconds for the stereo position to settle
 _DARK = 1 / 255
 MAX_DELAY = 2.0
@@ -567,6 +572,62 @@ def music_beathue(
         if level < _DARK:
             return OFF
         return Color.from_hsv(source.beats * step, saturation).scaled(level)
+
+    return effect
+
+
+def music_tempo(
+    source: AudioSource,
+    slow: float = 80.0,
+    fast: float = 160.0,
+    smoothing: float = 2.0,
+    delay: float = 0.0,
+    sensitivity: float = DEFAULT_SENSITIVITY,
+) -> Effect:
+    """Warm for slow music, cool for fast; brightness follows the loudness.
+
+    The tempo is estimated from the gaps between beats. ``slow`` and ``fast`` (bpm) are the
+    tempos shown as the warm and the cool end, ``smoothing`` the seconds the colour takes to settle.
+    """
+    if slow >= fast:
+        raise ValueError("slow must be below fast")
+    if smoothing < 0.0:
+        raise ValueError("smoothing must not be negative")
+    _set_delay(source, delay)
+    _check_sensitivity(source, sensitivity)
+    estimate: float | None = None  # seconds between beats
+    previous: float | None = None
+    seen = source.beats
+    position = 0.5
+    shown = 0.0
+    last = 0.0
+
+    def effect(t: float) -> Color:
+        nonlocal estimate, previous, seen, position, shown, last
+        step = max(0.0, t - last)
+        last = t
+        if source.beats != seen:
+            risen = source.beats - seen
+            seen = source.beats
+            if risen > 0 and previous is not None:
+                interval = (source.last_beat - previous) / risen
+                if _TEMPO_INTERVALS[0] <= interval <= _TEMPO_INTERVALS[1]:
+                    estimate = (
+                        interval
+                        if estimate is None
+                        else (1.0 - _TEMPO_BLEND) * estimate + _TEMPO_BLEND * interval
+                    )
+            previous = source.last_beat
+        target = 0.5 if estimate is None else min(1.0, max(0.0, (60.0 / estimate - slow) / (fast - slow)))
+        if smoothing > 0.0:
+            position += (target - position) * (1.0 - math.exp(-step / smoothing))
+        else:
+            position = target
+        shown = max(_loudness(source.levels), shown - _TEMPO_RELEASE * step)
+        level = shown * shown
+        if level < _DARK:
+            return OFF
+        return _TEMPO_SLOW.mix(_TEMPO_FAST, position).scaled(level)
 
     return effect
 

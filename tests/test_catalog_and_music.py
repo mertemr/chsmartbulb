@@ -70,6 +70,7 @@ def test_describe_is_plain_data_covering_every_effect():
         "volume": "audio",
         "stereo": "audio",
         "beathue": "audio",
+        "tempo": "audio",
         "screen": "screen",
     }
 
@@ -676,3 +677,48 @@ def test_beathue_refuses_what_does_not_fit():
     for params in bad:
         with pytest.raises(ValueError):
             catalog.create("beathue", params, audio=source)
+
+
+def test_tempo_colours_by_how_fast_the_beats_come():
+    source = FakeMusic()
+    source.levels = music.Levels(bass=1.0)
+    params = {"slow": 80, "fast": 120, "smoothing": 0}
+    tempo = catalog.create("tempo", params, audio=source)
+    source.beat(at=10.0)
+    source.now = 10.0
+    tempo(0.0)  # the first beat gives no interval yet
+    source.beat(at=10.5)
+    source.now = 10.5
+    assert tempo(0.5) == Color(g=160, b=255)  # 120 bpm is the fast end
+    source.beat(at=10.6)  # 0.1 s apart is no tempo
+    assert tempo(0.6) == Color(g=160, b=255)
+    source.beat(at=12.6)  # neither is 2 s
+    assert tempo(2.6) == Color(g=160, b=255)
+    source.now = 30.0
+    assert tempo(20.0) == Color(g=160, b=255)  # without beats the estimate holds
+
+    slow = catalog.create("tempo", params, audio=source)
+    source.beat(at=40.0)
+    slow(0.0)
+    source.beat(at=41.0)
+    assert slow(1.0) == Color(r=255, g=60)  # 60 bpm is below slow
+
+
+def test_tempo_reads_beats_that_arrive_between_two_frames():
+    source = FakeMusic()
+    source.levels = music.Levels(bass=1.0)
+    tempo = catalog.create("tempo", {"slow": 80, "fast": 120, "smoothing": 0}, audio=source)
+    source.beat(at=10.0)
+    tempo(0.0)
+    source.beat(at=10.5)
+    source.beat(at=11.0)  # two beats before the next frame: 0.5 s apart, not one 1 s beat
+    assert tempo(1.0) == Color(g=160, b=255)
+
+
+def test_tempo_is_dark_in_silence_and_refuses_what_does_not_fit():
+    source = FakeMusic()
+    tempo = catalog.create("tempo", {}, audio=source)
+    assert tempo(0.0) == Color()  # never beat and silent
+    for params in ({"slow": 120, "fast": 120}, {"slow": 160, "fast": 80}, {"smoothing": -1}, {"sensitivity": 2}):
+        with pytest.raises(ValueError):
+            catalog.create("tempo", params, audio=source)

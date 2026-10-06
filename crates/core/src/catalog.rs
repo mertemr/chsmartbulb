@@ -86,6 +86,7 @@ fn range(key: &str) -> (f64, f64, f64) {
         "smoothing" => (0.0, 2.0, 0.05),
         "speed" => (0.1, 5.0, 0.1),
         "step" => (1.0, 180.0, 1.0),
+        "slow" | "fast" => (40.0, 240.0, 1.0),
         _ => (0.0, 1.0, 0.01),
     }
 }
@@ -296,6 +297,31 @@ pub static CATALOG: &[EffectInfo] = &[
         ranges: &[],
     },
     EffectInfo {
+        name: "tempo",
+        summary: "warm for slow music, cool for fast, by the gaps between beats",
+        needs: Some(Needs::Audio),
+        defaults: || {
+            vec![
+                ("slow", Param::Number(80.0)),
+                ("fast", Param::Number(160.0)),
+                ("smoothing", Param::Number(2.0)),
+                ("delay", Param::Number(0.0)),
+                ("sensitivity", Param::Number(DEFAULT_SENSITIVITY)),
+            ]
+        },
+        build: |p, s| {
+            audio::music_tempo(
+                audio(s, "tempo")?,
+                n(p, "slow"),
+                n(p, "fast"),
+                n(p, "smoothing"),
+                n(p, "delay"),
+                n(p, "sensitivity"),
+            )
+        },
+        ranges: &[],
+    },
+    EffectInfo {
         name: "screen",
         summary: "follow the colour of the screen",
         needs: Some(Needs::Screen),
@@ -480,7 +506,7 @@ mod tests {
     fn describe_matches_the_python_shape() {
         let described = describe();
         let all = described.as_array().unwrap();
-        assert_eq!(all.len(), 14);
+        assert_eq!(all.len(), 15);
         let music = all.iter().find(|e| e["name"] == "music").unwrap();
         assert_eq!(music["needs"], "audio");
         assert_eq!(music["params"]["color"], Value::Null);
