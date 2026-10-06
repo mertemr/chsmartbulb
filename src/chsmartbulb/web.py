@@ -39,6 +39,8 @@ MAX_MESSAGE = 65536
 _HEADER_TIMEOUT = 10.0
 _LINGER = 1.0  # seconds to wait for a closing client to hang up
 _WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+# the app's own pages (Tauri on Linux/macOS, Windows, Android); a website cannot claim these origins
+_APP_ORIGINS = frozenset({"tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"})
 
 # fmt: off
 _TEXT, _CLOSE, _PING, _PONG = 0x1, 0x8, 0x9, 0xA
@@ -258,7 +260,7 @@ class Site:
             _respond(writer, 400)
             return
         origin = headers.get("origin")
-        if origin is not None and urlsplit(origin).netloc != headers.get("host"):
+        if origin is not None and origin not in _APP_ORIGINS and urlsplit(origin).netloc != headers.get("host"):
             # a page from elsewhere, open in a browser on this network, must not reach the bulb
             _respond(writer, 403)
             return

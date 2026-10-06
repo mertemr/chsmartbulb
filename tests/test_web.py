@@ -204,6 +204,10 @@ def test_websocket_needs_the_token_and_the_same_origin(root):
             assert not site.transport.light_bodies
 
             assert (await site.socket(origin="http://evil.example")).status == 403
+            for app_origin in ("tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"):
+                ws = await site.socket(origin=app_origin)
+                assert ws.status == 101
+                ws.close()
 
     run(scenario())
 
