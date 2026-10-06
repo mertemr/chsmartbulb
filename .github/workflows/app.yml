@@ -12,7 +12,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: app-${{ github.ref }}
+  # a push to a branch with a pull request and the pull request's own run share one group
+  group: app-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 env:
