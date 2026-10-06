@@ -139,7 +139,7 @@ To start it when you log in, a scheduled task does (put the token in `$CHSMARTBU
 address in `$CHSMARTBULB_ADDRESS` as user variables rather than in the command):
 
 ```powershell
-schtasks /Create /TN chsmartbulb /SC ONLOGON /TR "C:\path	o\chsmartbulb.exe -t ble daemon --listen 8377 --web 0.0.0.0:8378 --on-lock dim --on-sleep off"
+schtasks /Create /TN chsmartbulb /SC ONLOGON /TR "C:\Tools\chsmartbulb.exe -t ble daemon --listen 8377 --web 0.0.0.0:8378 --on-lock dim --on-sleep off"
 ```
 
 The sound needs no agent on the computer that runs the service: it listens to its own output while
