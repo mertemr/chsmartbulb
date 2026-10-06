@@ -181,7 +181,7 @@ async def _agent(args: argparse.Namespace) -> None:
     target = _remote(args) if args.host else args.socket
     if args.command == "screen-agent":
         _screen(args)()  # fail now if capture cannot work on this machine
-        await client.run_screen_agent(target, source_factory=_screen(args))
+        await client.run_screen_agent(target, source_factory=_screen(args), monitor=args.monitor)
         return
     _music(args)()
     await client.run_agent(target, source_factory=_music(args))

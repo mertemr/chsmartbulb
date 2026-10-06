@@ -235,6 +235,7 @@ class ScriptedScreen:
     def __init__(self, colors: list[Color], interval: float = 0.005) -> None:
         self.colors = colors
         self.interval = interval
+        self.color = Color()
         self.on_color: Callable[[Color], None] | None = None
         self._task: asyncio.Task[None] | None = None
 
@@ -243,6 +244,7 @@ class ScriptedScreen:
 
     async def _emit(self) -> None:
         for color in self.colors:
+            self.color = color
             if self.on_color is not None:
                 self.on_color(color)
             await asyncio.sleep(self.interval)

@@ -13,13 +13,14 @@ import asyncio
 import contextlib
 import functools
 import hmac
+import itertools
 import json
 import logging
 import math
 import os
 import signal
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -31,7 +32,7 @@ from .color import WHITE, Color, parse_color
 from .errors import ConnectionFailed, NotConnected, SmartBulbError, TransportError
 from .music import AudioSource, Levels, MusicSource, RemoteAudio
 from .protocol import NativeEffect
-from .screen import RemoteScreen, ScreenCapture, ScreenSource
+from .screen import PRIMARY, RemoteScreen, ScreenCapture, ScreenSource, list_monitors
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
@@ -54,9 +55,25 @@ class _Feed:
     local: Callable[[], Any]
     agents: int = 0
     active: Any = None  # the source the running effect reads
+    options: dict[str, Any] = field(default_factory=dict)  # what this machine's own capture is asked for
 
     def source(self) -> Any:
-        return self.remote if self.agents else self.local()
+        return self.remote if self.agents else self.local(**self.options)
+
+
+@dataclass
+class _Agent:
+    """Another machine feeding its sound or screen, as far as it said who it is."""
+
+    id: str
+    kind: str
+    send: Callable[[Mapping[str, Any]], Awaitable[None]]
+    name: str | None = None
+    monitors: list[dict[str, int]] = field(default_factory=list)
+    monitor: int | None = None
+
+    def info(self) -> dict[str, Any]:
+        return {"id": self.id, "name": self.name, "monitors": self.monitors, "monitor": self.monitor}
 
 
 def default_socket_path() -> Path:
@@ -113,7 +130,8 @@ class BulbService:
         poll_interval: float = 2.0,
         save_delay: float = 1.0,
         music_factory: Callable[[], AudioSource] = MusicSource,
-        screen_factory: Callable[[], ScreenSource] = ScreenCapture,
+        screen_factory: Callable[..., ScreenSource] = ScreenCapture,
+        monitor_lister: Callable[[], list[dict[str, int]]] = list_monitors,
     ) -> None:
         self._bulb = bulb
         self._state_path = state_path
@@ -128,6 +146,11 @@ class BulbService:
             "audio": _Feed(RemoteAudio(), music_factory),
             "screen": _Feed(RemoteScreen(), screen_factory),
         }
+        self._agents: dict[str, _Agent] = {}
+        self._agent_ids = itertools.count(1)
+        self._chosen: dict[tuple[str, str], int] = {}  # the monitor an agent of that name last chose
+        self._monitor_lister = monitor_lister
+        self._local_monitors: list[dict[str, int]] = []
         self._plan = Plan()
         self._adopt_on_connect = True  # no remembered state yet: take over what the bulb shows
         self._effect_task: asyncio.Task[None] | None = None
@@ -153,6 +176,7 @@ class BulbService:
             "timers": self._timers,
             "timer": self._timer,
             "raw": self._raw,
+            "monitor": self._monitor,
         }
 
     # --- lifecycle --------------------------------------------------------------------
@@ -165,6 +189,7 @@ class BulbService:
     async def start(self) -> None:
         """Load the remembered state and keep the bulb connected in the background."""
         self._load()
+        self._local_monitors = self._monitor_lister()
         self._supervisor = asyncio.create_task(self._supervise())
 
     async def close(self) -> None:
@@ -302,6 +327,17 @@ class BulbService:
             "playing": self._playing,
             **{kind: "agent" if feed.agents else "local" for kind, feed in self._feeds.items()},
             "agents": {kind: feed.agents for kind, feed in self._feeds.items()},
+            "agentInfo": {
+                kind: [agent.info() for agent in self._agents.values() if agent.kind == kind] for kind in self._feeds
+            },
+            **(
+                {
+                    "localMonitors": self._local_monitors,
+                    "localMonitor": self._feeds["screen"].options.get("monitor", PRIMARY),
+                }
+                if self._local_monitors
+                else {}
+            ),
             "watchers": len(self._listeners),
             **self._plan.to_json(),
         }
@@ -372,15 +408,41 @@ class BulbService:
         if self._playing and effect is not None and catalog.CATALOG[effect["name"]].needs == kind:
             await self._apply()  # restart the effect on the other source
 
-    async def _agent_joined(self, kind: str) -> None:
+    async def _agent_joined(self, kind: str, send: Callable[[Mapping[str, Any]], Awaitable[None]] | None = None) -> str:
+        async def nowhere(_message: Mapping[str, Any]) -> None:
+            pass
+
+        agent = _Agent(f"{kind}-{next(self._agent_ids)}", kind, send or nowhere)
         async with self._lock:
+            self._agents[agent.id] = agent
             self._feeds[kind].agents += 1
             log.info("%s agent connected", kind)
             await self._feed_changed(kind)
         self._notify()
+        return agent.id
 
-    async def _agent_left(self, kind: str) -> None:
+    async def _agent_hello(self, agent_id: str, hello: Mapping[str, Any]) -> None:
+        """An agent says who it is; one that chose a monitor before gets that one back."""
+        agent = self._agents[agent_id]
+        name = hello.get("name")
+        agent.name = str(name)[:64] if name else None
+        if agent.kind == "screen":
+            try:
+                agent.monitors = [
+                    {key: int(area[key]) for key in ("index", "width", "height")} for area in hello.get("monitors", ())
+                ]
+                agent.monitor = int(hello["monitor"]) if "monitor" in hello else None
+            except (KeyError, TypeError, ValueError):
+                agent.monitors, agent.monitor = [], None
+            chosen = self._chosen.get((agent.kind, agent.name)) if agent.name else None
+            if chosen is not None and chosen != agent.monitor and self._has_monitor(agent.monitors, chosen):
+                agent.monitor = chosen
+                await agent.send({"event": "monitor", "monitor": chosen})
+        self._notify()
+
+    async def _agent_left(self, kind: str, agent_id: str | None = None) -> None:
         async with self._lock:
+            self._agents.pop(agent_id or "", None)
             feed = self._feeds[kind]
             feed.agents -= 1
             log.info("%s agent disconnected", kind)
@@ -407,6 +469,35 @@ class BulbService:
         except (KeyError, TypeError, ValueError):
             return  # a malformed block is not worth a reply at forty a second
         self._feeds["audio"].remote.push(Levels(bass, mid, treble, balance), onset)
+
+    @staticmethod
+    def _has_monitor(monitors: list[dict[str, int]], index: int) -> bool:
+        return index == 0 or any(area["index"] == index for area in monitors)  # 0 is every monitor together
+
+    async def _monitor(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        target, index = str(request["agent"]), int(request["index"])
+        if target == "local":
+            if not self._local_monitors:
+                raise ValueError("this machine cannot capture its screen")
+            self._check_monitor(self._local_monitors, index)
+            self._feeds["screen"].options["monitor"] = index
+            await self._feed_changed("screen")  # an effect following the screen restarts on it
+            return {}
+        agent = self._agents.get(target)
+        if agent is None:
+            raise ValueError(f"no such agent: {target!r}")
+        if not agent.monitors:
+            raise ValueError("that agent cannot change its monitor")
+        self._check_monitor(agent.monitors, index)
+        agent.monitor = index
+        if agent.name:
+            self._chosen[(agent.kind, agent.name)] = index
+        await agent.send({"event": "monitor", "monitor": index})
+        return {}
+
+    def _check_monitor(self, monitors: list[dict[str, int]], index: int) -> None:
+        if not self._has_monitor(monitors, index):
+            raise ValueError(f"no monitor {index}; this machine has 1 to {max(area['index'] for area in monitors)}")
 
     async def _stop_effect(self) -> None:
         task, self._effect_task = self._effect_task, None
@@ -676,7 +767,7 @@ class BulbService:
         Each message is one JSON object. ``token`` is what the client must present first.
         """
         trusted = token is None
-        feeding: set[str] = set()  # what this connection supplies as an agent
+        feeding: dict[str, str] = {}  # what this connection supplies as an agent, and under which id
         watching: asyncio.Task[None] | None = None
         unsubscribe: Callable[[], None] | None = None
         try:
@@ -696,10 +787,15 @@ class BulbService:
                         reply = {"ok": True} if trusted else {"ok": False, "error": "wrong token"}
                     elif not trusted:
                         reply = {"ok": False, "error": "not authorised"}
+                    elif command == "hello" and request.get("kind") in self._feeds:
+                        kind = request["kind"]
+                        if kind not in feeding:
+                            feeding[kind] = await self._agent_joined(kind, send)
+                        await self._agent_hello(feeding[kind], request)
+                        continue  # nor is an agent's greeting
                     elif command in self._feeds:
                         if command not in feeding:
-                            feeding.add(command)
-                            await self._agent_joined(command)
+                            feeding[command] = await self._agent_joined(command, send)
                         self._push(command, request)
                         continue  # an agent's stream is not acknowledged
                     elif command == "subscribe":
@@ -719,8 +815,8 @@ class BulbService:
             if watching is not None and unsubscribe is not None:
                 unsubscribe()
                 watching.cancel()
-            for kind in feeding:
-                await self._agent_left(kind)
+            for kind, agent_id in feeding.items():
+                await self._agent_left(kind, agent_id)
 
     async def _report(self, changed: asyncio.Event, send: Callable[[Mapping[str, Any]], Awaitable[None]]) -> None:
         """Send the state after each change. A slow client gets the latest one, not a backlog."""

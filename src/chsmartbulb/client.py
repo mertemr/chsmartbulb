@@ -6,13 +6,14 @@ import asyncio
 import contextlib
 import json
 import logging
+import socket
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from .errors import ConnectionFailed, SmartBulbError
 from .music import Capture, Levels, MusicSource
-from .screen import ScreenCapture, ScreenFeed
+from .screen import PRIMARY, ScreenCapture, ScreenFeed, list_monitors
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -122,6 +123,7 @@ async def run_agent(
     *,
     source_factory: Callable[[], Capture] = MusicSource,
     retry_delay: float = 3.0,
+    name: str | None = None,
 ) -> None:
     """Analyse the audio playing on this machine and stream the result to a service.
 
@@ -132,19 +134,27 @@ async def run_agent(
     def attach(source: Capture, send: _Send) -> None:
         source.on_block = _audio_forwarder(send)
 
-    await _keep_streaming(target, source_factory, attach, "audio analysis", retry_delay)
+    def hello() -> dict[str, Any]:
+        return {"cmd": "hello", "kind": "audio", "name": name or socket.gethostname()}
+
+    await _keep_streaming(target, source_factory, attach, "audio analysis", retry_delay, hello=hello)
 
 
 async def run_screen_agent(
     target: Target,
     *,
-    source_factory: Callable[[], ScreenFeed] = ScreenCapture,
+    source_factory: Callable[..., ScreenFeed] = ScreenCapture,
     retry_delay: float = 3.0,
+    name: str | None = None,
+    monitors: Callable[[], list[dict[str, int]]] = list_monitors,
+    monitor: int = PRIMARY,
 ) -> None:
     """Watch this machine's screen and stream its colour to a service.
 
-    Runs until cancelled. Only one colour at a time travels, never the picture.
+    Runs until cancelled. Only one colour at a time travels, never the picture. The service
+    may tell the agent to watch another monitor; ``monitor`` is the one it starts on.
     """
+    watching = monitor
 
     def attach(source: ScreenFeed, send: _Send) -> None:
         def forward(color: Color) -> None:
@@ -152,7 +162,34 @@ async def run_screen_agent(
 
         source.on_color = forward
 
-    await _keep_streaming(target, source_factory, attach, "the screen colour", retry_delay)
+    def hello() -> dict[str, Any]:
+        return {
+            "cmd": "hello",
+            "kind": "screen",
+            "name": name or socket.gethostname(),
+            "monitors": monitors(),
+            "monitor": watching,
+        }
+
+    def on_event(event: Mapping[str, Any]) -> ScreenFeed | None:
+        nonlocal watching
+        if event.get("event") != "monitor":
+            return None
+        try:
+            chosen = int(event["monitor"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if chosen == watching:
+            return None
+        watching = chosen
+        log.info("the service asks for monitor %d", chosen)
+        return source_factory(monitor=chosen)
+
+    def make() -> ScreenFeed:
+        # a reconnecting agent keeps watching what the service last asked for
+        return source_factory() if watching == monitor else source_factory(monitor=watching)
+
+    await _keep_streaming(target, make, attach, "the screen colour", retry_delay, hello=hello, on_event=on_event)
 
 
 class _Source(Protocol):
@@ -169,10 +206,13 @@ async def _keep_streaming(
     attach: Callable[[Any, _Send], None],
     what: str,
     retry_delay: float,
+    *,
+    hello: Callable[[], Mapping[str, Any]] | None = None,
+    on_event: Callable[[Mapping[str, Any]], Any] | None = None,
 ) -> None:
     while True:
         try:
-            await _stream(target, source_factory(), attach, what)
+            await _stream(target, source_factory(), attach, what, hello, on_event)
         except SmartBulbError as exc:
             log.warning("%s; retrying in %g s", exc, retry_delay)
             log.debug("details", exc_info=exc)
@@ -201,25 +241,61 @@ def _audio_forwarder(send: _Send) -> Callable[[Levels, float], None]:
     return forward
 
 
-async def _stream(target: Target, source: _Source, attach: Callable[[Any, _Send], None], what: str) -> None:
+async def _listen(reader: asyncio.StreamReader, events: asyncio.Queue[Mapping[str, Any]]) -> None:
+    """Pass on what the service says to this agent; ends when it hangs up."""
+    while line := await reader.readline():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict):
+            events.put_nowait(event)
+
+
+async def _stream(
+    target: Target,
+    source: _Source,
+    attach: Callable[[Any, _Send], None],
+    what: str,
+    hello: Callable[[], Mapping[str, Any]] | None = None,
+    on_event: Callable[[Mapping[str, Any]], Any] | None = None,
+) -> None:
     reader, writer = await connect(target)
 
     def send(message: Mapping[str, Any]) -> None:
         writer.write(json.dumps(message).encode() + b"\n")
 
     attach(source, send)
+    if hello is not None:
+        send(hello())
     await source.start()
     log.info("streaming %s to %s", what, target)
-    closed = asyncio.ensure_future(reader.read())  # the service sends nothing back; this ends when it hangs up
+    events: asyncio.Queue[Mapping[str, Any]] = asyncio.Queue()
+    closed = asyncio.ensure_future(_listen(reader, events))  # ends when the service hangs up
     capture = asyncio.ensure_future(source.wait())
+    event = asyncio.ensure_future(events.get())
     try:
-        await asyncio.wait({closed, capture}, return_when=asyncio.FIRST_COMPLETED)
-        if capture.done():
-            capture.result()  # raises the capture error, if that is what ended it
+        while True:
+            await asyncio.wait({closed, capture, event}, return_when=asyncio.FIRST_COMPLETED)
+            if capture.done():
+                capture.result()  # raises the capture error, if that is what ended it
+                break
+            if closed.done():
+                break
+            told, event = event.result(), asyncio.ensure_future(events.get())
+            replacement = on_event(told) if on_event is not None else None
+            if replacement is not None:  # asked to capture something else: swap without leaving the service
+                capture.cancel()
+                await source.stop()
+                source = replacement
+                attach(source, send)
+                await source.start()
+                capture = asyncio.ensure_future(source.wait())
     finally:
         closed.cancel()
         capture.cancel()
+        event.cancel()
         await source.stop()
         writer.close()
         with contextlib.suppress(asyncio.CancelledError, OSError):
-            await asyncio.gather(closed, capture, return_exceptions=True)
+            await asyncio.gather(closed, capture, event, return_exceptions=True)

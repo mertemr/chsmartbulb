@@ -38,6 +38,24 @@ _VIVID = 4.0  # how much more a fully saturated pixel counts than a grey one
 _NEUTRAL = (0.48, 1.0, 0.23)
 
 
+def list_monitors() -> list[dict[str, int]]:
+    """The monitors of this machine as ``{"index", "width", "height"}`` (``[]`` where nothing can capture)."""
+    try:
+        import mss
+    except ImportError:
+        return []
+    try:
+        with (getattr(mss, "MSS", None) or mss.mss)() as grabber:
+            return [
+                {"index": index, "width": area["width"], "height": area["height"]}
+                for index, area in enumerate(grabber.monitors)
+                if index > 0  # 0 is all of them together, which the interface offers by itself
+            ]
+    except Exception:  # no display, no permission: just no list
+        log.debug("cannot list the monitors", exc_info=True)
+        return []
+
+
 class ScreenSource(Protocol):
     """What the screen effect reads and the service starts and stops."""
 

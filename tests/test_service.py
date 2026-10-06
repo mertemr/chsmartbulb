@@ -326,7 +326,8 @@ def test_state_says_why_the_bulb_is_away_and_a_request_can_retry_at_once():
     async def scenario():
         transport = FakeBulbTransport()
         transport.fail_open = True
-        daemon = service.BulbService(ChSmartBulb(transport, auto_reconnect=False), retry_delay=30.0)
+        bulb = ChSmartBulb(transport, auto_reconnect=False)
+        daemon = service.BulbService(bulb, retry_delay=30.0, monitor_lister=list)
         heard = []
         daemon.subscribe(heard.append)
         await daemon.start()
