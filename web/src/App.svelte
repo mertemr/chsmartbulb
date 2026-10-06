@@ -1,5 +1,6 @@
 <script lang="ts">
   import DevicePanel from './components/DevicePanel.svelte'
+  import FeedBadge from './components/FeedBadge.svelte'
   import LightPanel from './components/LightPanel.svelte'
   import Icon from './components/Icon.svelte'
   import Login from './components/Login.svelte'
@@ -77,6 +78,7 @@
           ></span>
           <span class="truncate">{summary}</span>
         </p>
+        <FeedBadge />
       </div>
       <button
         type="button"

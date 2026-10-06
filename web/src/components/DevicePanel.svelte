@@ -1,6 +1,7 @@
 <script lang="ts">
   import { app } from '../lib/app.svelte'
   import { cssColor } from '../lib/color'
+  import { feedOf } from '../lib/sources'
 
   // only the app build carries the part that offers this device to the network
   const shareView = import.meta.env.MODE === 'app' ? import('./ShareNetwork.svelte') : null
@@ -33,9 +34,8 @@
   })
 
   function feed(kind: 'audio' | 'screen'): { tone: Tone; text: string } {
-    const agents = app.state?.agents?.[kind] ?? 0
-    if (!agents) return { tone: 'idle', text: app.mode === 'native' ? 'this device' : 'the service’s own computer' }
-    return { tone: 'ok', text: agents > 1 ? `${agents} agents` : 'an agent on another computer' }
+    const from = feedOf(app.state, kind, app.mode === 'native')
+    return { tone: from.agent ? 'ok' : 'idle', text: from.agent ? `${from.from} (agent)` : from.from }
   }
 
   const links = $derived.by((): { name: string; tone: Tone; text: string }[] => {

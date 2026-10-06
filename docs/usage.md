@@ -154,8 +154,11 @@ second and sends only that colour.
 chsmartbulb --host laptop.local --token SECRET screen-agent
 ```
 
-It needs the `screen` extra (numpy and mss), no Bluetooth. `--monitor N` picks a monitor other
-than the first; `0` takes all of them as one picture. Both agents can run side by side.
+It needs the `screen` extra (numpy and mss), no Bluetooth. `--monitor N` picks the monitor it
+starts on (the first by default; `0` takes all of them as one picture), and the page changes it
+while the agent runs: the screen mode lists the agent's monitors and the choice goes back to it.
+The same list shows for the service's own screen while no agent feeds it. Both agents can run
+side by side.
 
 ```bash
 pip install "chsmartbulb[screen] @ git+https://github.com/mertemr/chsmartbulb"
@@ -172,7 +175,15 @@ One JSON object per line in each direction. Replies carry `"ok"` and, on failure
 ```
 
 Commands: `status`, `on`, `off`, `color`, `brightness`, `effect`, `native`, `stop`, `effects`,
-`info`, `timers`, `timer`, `raw`, `subscribe`, `reconnect`.
+`info`, `timers`, `timer`, `raw`, `subscribe`, `reconnect`, `monitor`.
+
+Agents stream `audio` or `screen` blocks, which are not answered. An agent may greet first with
+`{"cmd": "hello", "kind": "screen", "name": "desk", "monitors": [{"index": 1, "width": 1920,
+"height": 1080}], "monitor": 1}` (an audio agent sends `kind` and `name` only); the state then
+lists it under `agentInfo`. `{"cmd": "monitor", "agent": "<id>", "index": 2}` asks a screen agent
+for another monitor (`0` is all of them; `"local"` addresses the service's own capture, where it
+has one), and the service tells that agent `{"event": "monitor", "monitor": 2}` on its own
+connection, again whenever an agent of the same name comes back.
 
 A request may carry an `"id"` of its own choosing, which the reply repeats. After
 `{"cmd": "subscribe"}`, whose reply holds the current state, the service sends

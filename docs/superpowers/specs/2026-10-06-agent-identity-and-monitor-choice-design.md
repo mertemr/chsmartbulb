@@ -12,7 +12,7 @@ Assumptions (from the conversation, not yet confirmed one by one): the choice is
 it is remembered only while the service runs; sound-source choice, merging monitors of several
 agents and saving to disk are out of scope.
 
-## Protocol additions (docs/protocol.md)
+## Protocol additions (docs/usage.md, socket protocol)
 
 1. **`hello`**, agent → service, sent once after auth and before the stream:
    `{"cmd":"hello","kind":"screen"|"audio","name":"MERT-PC","monitors":[{"index":1,"width":1920,"height":1080}],"monitor":1}`.
