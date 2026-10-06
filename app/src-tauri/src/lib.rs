@@ -6,15 +6,22 @@
 //! also connect to a Python service on the network, which needs nothing from here.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use chsmartbulb_core::service::Options;
-use chsmartbulb_core::{Bearer, Bulb, Service};
+use chsmartbulb_core::sim::SimulatedBulb;
+use chsmartbulb_core::{Bearer, Bulb, Connector, Service};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_chsmartbulb::{AudioInput, AudioRoute, BluetoothExt, Found, Readiness};
 use tokio::sync::Mutex;
+
+mod share;
+
+/// The address that stands for the simulated bulb, for trying the app without one.
+const SIMULATED: &str = "SIMULATED";
 
 /// The bulb this app drives.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,11 +38,15 @@ struct Settings {
     device: Option<Device>,
     #[serde(default)]
     audio_input: AudioInput,
+    #[serde(default)]
+    sharing: share::Sharing,
 }
 
 struct Running {
     service: Service,
     forward: JoinHandle<()>,
+    shared: Option<share::Shared>,
+    share_problem: Option<String>,
 }
 
 struct App {
@@ -79,9 +90,20 @@ fn save_settings(app: &AppHandle, settings: &Settings) {
 }
 
 /// Build the service for `device` and keep the interface told of its state.
-async fn start(app: &AppHandle, device: &Device, input: AudioInput) -> Result<Running, String> {
+async fn start(
+    app: &AppHandle,
+    device: &Device,
+    input: AudioInput,
+    sharing: &share::Sharing,
+) -> Result<Running, String> {
     let bluetooth = app.bluetooth();
-    let connector = bluetooth.connector(&device.address, device.bearer).map_err(failed)?;
+    let connector: Arc<dyn Connector> = if device.address == SIMULATED {
+        let simulated = SimulatedBulb::new();
+        simulated.with(|bulb| bulb.channels = [0, 0, 0, 255, 0]); // lit white, as a bulb usually comes on
+        simulated.connector()
+    } else {
+        bluetooth.connector(&device.address, device.bearer).map_err(failed)?
+    };
     let state_path = app.path().app_data_dir().ok().map(|dir| dir.join("state.json"));
     let options = Options { state_path, ..Options::default() };
     let mut builder = Service::builder(Bulb::new(connector)).options(options);
@@ -105,12 +127,20 @@ async fn start(app: &AppHandle, device: &Device, input: AudioInput) -> Result<Ru
     if let Err(error) = bluetooth.keep_running(true, &title).await {
         log::warn!("cannot keep running in the background: {error}");
     }
-    Ok(Running { service, forward })
+    let (shared, share_problem) = match (&sharing.token, sharing.enabled) {
+        (Some(token), true) => match share::start(&service, token).await {
+            Ok(shared) => (Some(shared), None),
+            Err(problem) => (None, Some(problem)),
+        },
+        _ => (None, None),
+    };
+    Ok(Running { service, forward, shared, share_problem })
 }
 
 async fn stop(app: &AppHandle, state: &App) {
     if let Some(running) = state.running.lock().await.take() {
         running.forward.abort();
+        drop(running.shared);
         running.service.close().await;
         let _ = app.bluetooth().keep_running(false, "").await;
     }
@@ -120,7 +150,7 @@ async fn restart(app: &AppHandle, state: &App) -> Reply<()> {
     stop(app, state).await;
     let settings = state.settings.lock().await.clone();
     if let Some(device) = &settings.device {
-        let running = start(app, device, settings.audio_input).await?;
+        let running = start(app, device, settings.audio_input, &settings.sharing).await?;
         *state.running.lock().await = Some(running);
     }
     Ok(())
@@ -206,6 +236,55 @@ async fn request(state: State<'_, App>, message: Value) -> Reply<Value> {
     Ok(reply)
 }
 
+async fn share_status_of(state: &App) -> share::Status {
+    let sharing = state.settings.lock().await.sharing.clone();
+    let problem = state.running.lock().await.as_ref().and_then(|running| running.share_problem.clone());
+    share::Status {
+        enabled: sharing.enabled,
+        token: sharing.token,
+        addresses: share::addresses(),
+        lines_port: chsmartbulb_core::server::LINES_PORT,
+        web_port: chsmartbulb_core::server::WEB_PORT,
+        problem,
+    }
+}
+
+#[tauri::command]
+async fn share_status(state: State<'_, App>) -> Reply<share::Status> {
+    Ok(share_status_of(&state).await)
+}
+
+/// Offer the service to the network, or stop; `renew` replaces the token, which turns away
+/// every machine that knew the old one.
+#[tauri::command]
+async fn set_sharing(
+    app: AppHandle,
+    state: State<'_, App>,
+    enabled: bool,
+    renew: Option<bool>,
+) -> Reply<share::Status> {
+    {
+        let mut settings = state.settings.lock().await;
+        settings.sharing.enabled = enabled;
+        if settings.sharing.token.is_none() || renew.unwrap_or(false) {
+            settings.sharing.token = Some(share::new_token());
+        }
+        save_settings(&app, &settings);
+    }
+    let sharing = state.settings.lock().await.sharing.clone();
+    if let Some(running) = state.running.lock().await.as_mut() {
+        running.shared = None; // let go of the ports before taking them again
+        running.share_problem = None;
+        if let (true, Some(token)) = (sharing.enabled, &sharing.token) {
+            match share::start(&running.service, token).await {
+                Ok(shared) => running.shared = Some(shared),
+                Err(problem) => running.share_problem = Some(problem),
+            }
+        }
+    }
+    Ok(share_status_of(&state).await)
+}
+
 #[tauri::command]
 async fn audio_route(app: AppHandle) -> Reply<AudioRoute> {
     app.bluetooth().audio_route().await.map_err(failed)
@@ -251,6 +330,8 @@ pub fn run() {
             request,
             audio_route,
             open_settings,
+            share_status,
+            set_sharing,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the app");

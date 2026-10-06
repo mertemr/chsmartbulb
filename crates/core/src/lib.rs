@@ -13,7 +13,10 @@ pub mod effects;
 pub mod error;
 pub mod protocol;
 pub mod screen;
+#[cfg(feature = "server")]
+pub mod server;
 pub mod service;
+pub mod sim;
 pub mod transport;
 
 pub use bulb::Bulb;

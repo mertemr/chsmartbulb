@@ -20,12 +20,14 @@
     {/await}
   {:else}
     <p class="bg-raised text-muted rounded-xl p-3 text-sm">
-      {#if kind === 'audio'}
-        The desktop app does not listen to sound yet. Until it does, run the Python service on this computer, which
-        follows its audio, and connect to it from the start screen.
+      {#if agents}
+        Following the {WHAT[kind]} of another computer{agents > 1 ? ` (${agents} agents)` : ''}.
+      {:else if kind === 'audio'}
+        The desktop app does not listen to sound itself yet. Turn on <em>Share on the network</em> under Device and run
+        the Python package’s <code>audio-agent</code> on this or another computer.
       {:else}
-        The screen effect needs a computer: run the Python service there with <code>screen-agent</code> and connect to
-        it from the start screen.
+        The screen effect follows a computer’s screen: turn on <em>Share on the network</em> under Device and run the
+        Python package’s <code>screen-agent</code> there.
       {/if}
     </p>
   {/if}

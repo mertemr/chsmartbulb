@@ -2,7 +2,7 @@
   // The app's first screen: find the bulb and choose how to reach it, or use a
   // service that already runs on another machine.
   import { app } from '../lib/app.svelte'
-  import { native, type Bearer, type Found } from '../lib/native'
+  import { native, SIMULATED, type Bearer, type Found } from '../lib/native'
 
   let bearer = $state<Bearer>(app.setup?.device?.bearer ?? 'ble')
   let found = $state<Found[]>([])
@@ -172,4 +172,13 @@
       <button class="border-line h-12 rounded-xl border font-semibold" type="submit">Connect to the service</button>
     </form>
   </section>
+
+  <button
+    type="button"
+    class="text-accent justify-self-center text-sm font-medium"
+    disabled={!!connecting}
+    onclick={() => choose({ address: SIMULATED, name: 'Simulated bulb', bonded: false, classic: false, le: true, likely: true })}
+  >
+    No bulb at hand? Try the app with a simulated one
+  </button>
 </main>

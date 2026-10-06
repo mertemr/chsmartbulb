@@ -1,11 +1,14 @@
-//! An in-memory bulb, modelled on behaviour observed on the real one (see `tests/fakes.py`).
+//! A simulated bulb in memory, modelled on behaviour observed on the real one.
+//!
+//! The tests drive the service against it, and the app offers it as a demo so the
+//! interface can be tried without a bulb. It mirrors `tests/fakes.py`.
 
 use std::sync::{Arc, Mutex};
 
+use crate::error::{Error, Result};
+use crate::protocol::{self as p, frame_type, Command, Frame, FrameReader, NativeEffect};
+use crate::transport::{Bearer, ChannelLink, Connector, Link, LinkFeed, Writer};
 use async_trait::async_trait;
-use chsmartbulb_core::error::{Error, Result};
-use chsmartbulb_core::protocol::{self as p, frame_type, Command, Frame, FrameReader, NativeEffect};
-use chsmartbulb_core::transport::{Bearer, ChannelLink, Connector, Link, LinkFeed, Writer};
 
 pub const NAME_ANSWER: &str = "01fe0000418050000000000000000000312e302e00000003536d61727442756c6220426c7565746f6f7468\
     00000000000000000000000000000000000000000000000000000000000000000000000000";
@@ -15,7 +18,7 @@ pub const TIMERS_ANSWER: &str = "01fe0000413068000200000000000000\
     706f776572206f6e0000010000000000120000001300000014000000150000000501007f0a23000301000000";
 
 #[derive(Default)]
-pub struct FakeState {
+pub struct SimState {
     pub opened: usize,
     pub fail_open: bool,
     pub light_bodies: Vec<Vec<u8>>,
@@ -39,17 +42,23 @@ pub struct LastLight {
 }
 
 #[derive(Clone)]
-pub struct FakeBulb {
-    pub state: Arc<Mutex<FakeState>>,
+pub struct SimulatedBulb {
+    pub state: Arc<Mutex<SimState>>,
 }
 
-impl FakeBulb {
+impl Default for SimulatedBulb {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SimulatedBulb {
     pub fn new() -> Self {
-        let state = FakeState { timers_answer: p::unhex(TIMERS_ANSWER).unwrap(), ..FakeState::default() };
+        let state = SimState { timers_answer: p::unhex(TIMERS_ANSWER).unwrap(), ..SimState::default() };
         Self { state: Arc::new(Mutex::new(state)) }
     }
 
-    pub fn with<T>(&self, f: impl FnOnce(&mut FakeState) -> T) -> T {
+    pub fn with<T>(&self, f: impl FnOnce(&mut SimState) -> T) -> T {
         f(&mut self.state.lock().unwrap())
     }
 
@@ -76,13 +85,13 @@ impl FakeBulb {
     }
 }
 
-struct FakeWriter {
-    state: Arc<Mutex<FakeState>>,
+struct SimWriter {
+    state: Arc<Mutex<SimState>>,
     reader: Mutex<FrameReader>,
     feed: LinkFeed,
 }
 
-fn answer(state: &FakeState, feed: &LinkFeed, data: Vec<u8>) {
+fn answer(state: &SimState, feed: &LinkFeed, data: Vec<u8>) {
     let size = state.chunk.unwrap_or(data.len());
     for piece in data.chunks(size) {
         feed.push(piece.to_vec());
@@ -94,7 +103,7 @@ fn reply(command: u8, body: Vec<u8>) -> Vec<u8> {
 }
 
 #[async_trait]
-impl Writer for FakeWriter {
+impl Writer for SimWriter {
     async fn write(&self, data: &[u8]) -> Result<()> {
         let frames = self.reader.lock().unwrap().feed(data);
         let mut state = self.state.lock().unwrap();
@@ -144,22 +153,22 @@ impl Writer for FakeWriter {
 }
 
 #[async_trait]
-impl Connector for FakeBulb {
+impl Connector for SimulatedBulb {
     async fn connect(&self) -> Result<Arc<dyn Link>> {
         let mut state = self.state.lock().unwrap();
         if state.fail_open {
-            return Err(Error::ConnectionFailed("fake: host is down".into()));
+            return Err(Error::ConnectionFailed("simulated: host is down".into()));
         }
         state.opened += 1;
         let (link, feed) = ChannelLink::new_with(|feed| {
-            Box::new(FakeWriter { state: self.state.clone(), reader: Mutex::new(FrameReader::new()), feed })
+            Box::new(SimWriter { state: self.state.clone(), reader: Mutex::new(FrameReader::new()), feed })
         });
         state.feed = Some(feed);
         Ok(link)
     }
 
     fn describe(&self) -> String {
-        "fake bulb".into()
+        "the simulated bulb".into()
     }
 
     fn bearer(&self) -> Bearer {

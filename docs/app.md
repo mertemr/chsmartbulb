@@ -51,8 +51,24 @@ Where the phone's sound goes is the system's choice, not the app's. On Samsung p
 Bluetooth speakers at once. The *Sound* panel shows the current outputs and links to the
 settings.
 
-The desktop app does not listen to sound yet, and the screen effect needs a computer: for
-those, run the Python service and connect the app to it from its first screen.
+The desktop app does not listen to sound itself yet, and the screen effect follows a computer:
+for those, turn on sharing and run the Python package's agents (see below).
+
+## Sharing on the network
+
+*Share on the network* under Device makes the app a service for other machines, as
+`chsmartbulb daemon --listen 8377 --web 8378` does: browsers open the interface on port 8378,
+and the Python package's command line and its `audio-agent` and `screen-agent` connect to port
+8377 with the token shown there. A phone holding the bulb can follow a computer's screen or
+sound this way. Nothing is encrypted, so keep it to a network you trust; *New token* turns away
+every machine that knew the old one.
+
+## Without a bulb
+
+*Try the app with a simulated one*, at the bottom of the first screen, drives an in-memory bulb
+that behaves like the real one. The same simulation runs the Rust tests, and
+`cargo run -p chsmartbulb-core --features server --example serve` serves it on ports 8377 and
+8378 for trying the web interface and the command line.
 
 ## Background
 

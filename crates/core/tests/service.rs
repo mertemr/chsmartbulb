@@ -1,7 +1,5 @@
 //! The background service against a fake bulb; mirrors `tests/test_service.py`.
 
-mod fake;
-
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,8 +8,8 @@ use async_trait::async_trait;
 use chsmartbulb_core::audio::AudioSource;
 use chsmartbulb_core::catalog::Needs;
 use chsmartbulb_core::service::{AudioCapture, Options, Service, Session};
+use chsmartbulb_core::sim::SimulatedBulb as FakeBulb;
 use chsmartbulb_core::{Bulb, Result};
-use fake::FakeBulb;
 use serde_json::{json, Value};
 
 fn options() -> Options {
@@ -219,7 +217,7 @@ async fn supervisor_reconnects_and_resumes_the_effect() {
     assert_eq!(reply["ok"], true); // accepted while the bulb is away
     let status = ask(&service, json!({"cmd": "status"})).await;
     assert_eq!(status["connected"], false);
-    assert_eq!(status["problem"], "fake: host is down");
+    assert_eq!(status["problem"], "simulated: host is down");
     assert!(ask(&service, json!({"cmd": "info"})).await["error"].as_str().unwrap().contains("not connected"));
 
     fake.with(|s| s.fail_open = false); // the bulb is switched on

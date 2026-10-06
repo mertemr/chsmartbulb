@@ -20,6 +20,16 @@ export type Found = {
 export type AudioInput = 'playback' | 'microphone'
 export type Setup = { device: Device | null; audioInput: AudioInput; platform: string }
 export type AudioRoute = { outputs: string[]; speakers: string[]; canCapturePlayback: boolean }
+export type ShareStatus = {
+  enabled: boolean
+  token: string | null
+  addresses: string[]
+  linesPort: number
+  webPort: number
+  problem: string | null
+}
+/** Stands for the simulated bulb, for trying the app without one. */
+export const SIMULATED = 'SIMULATED'
 
 export const native = {
   setup: () => invoke<Setup>('setup'),
@@ -30,6 +40,8 @@ export const native = {
   setAudioInput: (input: AudioInput) => invoke<void>('set_audio_input', { input }),
   audioRoute: () => invoke<AudioRoute>('audio_route'),
   openSettings: (which: 'bluetooth' | 'sound') => invoke<void>('open_settings', { which }),
+  shareStatus: () => invoke<ShareStatus>('share_status'),
+  setSharing: (enabled: boolean, renew = false) => invoke<ShareStatus>('set_sharing', { enabled, renew }),
 }
 
 export class NativeLink implements Link {

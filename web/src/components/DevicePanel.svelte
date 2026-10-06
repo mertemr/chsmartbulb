@@ -2,6 +2,9 @@
   import { app } from '../lib/app.svelte'
   import { cssColor } from '../lib/color'
 
+  // only the app build carries the part that offers this device to the network
+  const shareView = import.meta.env.MODE === 'app' ? import('./ShareNetwork.svelte') : null
+
   type Info = { name: string; model: string; version: string }
   type Tone = 'ok' | 'busy' | 'down' | 'idle'
 
@@ -31,7 +34,7 @@
 
   function feed(kind: 'audio' | 'screen'): { tone: Tone; text: string } {
     const agents = app.state?.agents?.[kind] ?? 0
-    if (!agents) return { tone: 'idle', text: 'the service’s own computer' }
+    if (!agents) return { tone: 'idle', text: app.mode === 'native' ? 'this device' : 'the service’s own computer' }
     return { tone: 'ok', text: agents > 1 ? `${agents} agents` : 'an agent on another computer' }
   }
 
@@ -51,7 +54,8 @@
         tone: state?.link === 'connected' ? 'ok' : state?.link === 'connecting' ? 'busy' : 'down',
         text: bulb,
       },
-      ...(own ? [] : [{ name: 'Sound from', ...feed('audio') }, { name: 'Screen from', ...feed('screen') }]),
+      { name: 'Sound from', ...feed('audio') },
+      { name: 'Screen from', ...feed('screen') },
       {
         name: 'Also watching',
         tone: others ? 'ok' : 'idle',
@@ -107,6 +111,12 @@
       <p class="text-danger mt-2 text-sm" role="alert">{problem}</p>
     {/if}
   </div>
+
+  {#if app.mode === 'native' && shareView}
+    {#await shareView then { default: ShareNetwork }}
+      <ShareNetwork />
+    {/await}
+  {/if}
 
   <div class="flex gap-2">
     <button
