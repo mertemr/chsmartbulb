@@ -71,6 +71,7 @@ def test_describe_is_plain_data_covering_every_effect():
         "stereo": "audio",
         "beathue": "audio",
         "tempo": "audio",
+        "centroid": "audio",
         "screen": "screen",
     }
 
@@ -737,3 +738,29 @@ def test_tempo_ignores_beats_from_before_it_started():
     source.beat(at=11.0)  # now 0.5 s from the previous beat seen by the effect
     source.now = 11.0
     assert tempo(1.0) == Color(g=160, b=255)  # 120 bpm is the fast end
+
+
+def test_centroid_blends_by_where_the_weight_lies():
+    source = FakeMusic()
+    centroid = catalog.create("centroid", {"low": "ff0000", "high": "0000ff", "width": 1, "release": 2.0}, audio=source)
+    assert centroid(0.0) == Color()  # silent: dark, and no division by zero
+    source.levels = music.Levels(bass=1.0)
+    assert centroid(1.0) == Color(r=255)  # all bass is the low colour
+    source.levels = music.Levels(treble=1.0)
+    assert centroid(1.05) == Color(r=183, b=72)  # on its way to the high colour
+    source.levels = music.Levels(mid=1.0)
+    even = centroid(101.0)  # out of the dark a sound shows where it is at once
+    assert 100 < even.r < 160
+    assert 100 < even.b < 160
+    source.levels = music.Levels()
+    quiet = centroid(101.2)
+    assert quiet.r > 0
+    assert quiet.b > 0  # silence keeps the position
+
+
+def test_centroid_refuses_what_does_not_fit():
+    source = FakeMusic()
+    with pytest.raises(ValueError, match="width"):
+        catalog.create("centroid", {"width": 0}, audio=source)
+    with pytest.raises(ValueError, match="delay"):
+        catalog.create("centroid", {"delay": 5}, audio=source)

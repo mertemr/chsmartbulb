@@ -467,6 +467,50 @@ pub fn music_tempo(
     }))
 }
 
+/// Blend between two colours by where the sound's weight lies between bass and treble.
+///
+/// The weight of real music seldom passes the middle, so `width` stretches it.
+/// Brightness follows the loudness.
+pub fn music_centroid(
+    source: Arc<AudioSource>,
+    low: Color,
+    high: Color,
+    width: f64,
+    release: f64,
+    delay: f64,
+) -> Result<Effect> {
+    if width <= 0.0 {
+        return Err(invalid("width must be positive"));
+    }
+    source.set_delay(delay)?;
+    let mut shown = 0.0f64;
+    let mut position = 0.0f64;
+    let mut last = 0.0;
+    Ok(Box::new(move |t| {
+        let step = (t - last).max(0.0);
+        last = t;
+        let levels = source.heard().levels;
+        let total = levels.bass + levels.mid + levels.treble;
+        let faded = (shown - release * step).max(0.0);
+        if total > 0.0 {
+            // silence says nothing about the weight, keep the last one
+            let target = (width * (0.5 * levels.mid + levels.treble) / total).clamp(0.0, 1.0);
+            if faded * faded < DARK {
+                position = target;
+            } else {
+                position += (target - position) * (1.0 - (-step / PAN_SMOOTHING).exp());
+            }
+        }
+        shown = levels.loudness().max(faded);
+        let level = shown * shown;
+        if level >= DARK {
+            low.mix(&high, position).scaled(level)
+        } else {
+            OFF
+        }
+    }))
+}
+
 /// Bass drives red, mids green and treble blue; `release` is the fall rate per second.
 pub fn music_spectrum(source: Arc<AudioSource>, release: f64, delay: f64) -> Result<Effect> {
     source.set_delay(delay)?;
@@ -747,5 +791,32 @@ mod tests {
         set(&now, 11.0);
         source.publish(loud, 10.0); // second beat change: now interval = (11.0 - 10.5) / 1 = 0.5s
         assert_eq!(effect(1.0), Color::rgb(0, 160, 255)); // 120 bpm is the fast end
+    }
+
+    #[test]
+    fn centroid_blends_by_where_the_weight_lies() {
+        let (clock, _) = manual_clock();
+        let source = AudioSource::new(clock);
+        let mut effect = music_centroid(source.clone(), RED, BLUE, 1.0, 2.0, 0.0).unwrap();
+        assert_eq!(effect(0.0), OFF); // silent: dark, and no division by zero
+        source.publish(Levels { bass: 1.0, ..Levels::default() }, 0.0);
+        assert_eq!(effect(1.0), Color::rgb(255, 0, 0));
+        source.publish(Levels { treble: 1.0, ..Levels::default() }, 0.0);
+        assert_eq!(effect(1.05), Color::rgb(183, 0, 72));
+        source.publish(Levels { mid: 1.0, ..Levels::default() }, 0.0);
+        let even = effect(101.0); // out of the dark a sound shows where it is at once
+        assert!(100 < even.r && even.r < 160);
+        assert!(100 < even.b && even.b < 160);
+        source.publish(Levels::default(), 0.0);
+        let quiet = effect(101.2);
+        assert!(quiet.r > 0 && quiet.b > 0); // silence keeps the position
+    }
+
+    #[test]
+    fn centroid_refuses_what_does_not_fit() {
+        let (clock, _) = manual_clock();
+        let source = AudioSource::new(clock);
+        assert!(music_centroid(source.clone(), RED, BLUE, 0.0, 3.0, 0.0).is_err());
+        assert!(music_centroid(source.clone(), RED, BLUE, 2.0, 3.0, 5.0).is_err());
     }
 }

@@ -322,6 +322,31 @@ pub static CATALOG: &[EffectInfo] = &[
         ranges: &[],
     },
     EffectInfo {
+        name: "centroid",
+        summary: "blend two colours by whether the sound is bass-heavy or bright",
+        needs: Some(Needs::Audio),
+        defaults: || {
+            vec![
+                ("low", Param::Color(Some(RED))),
+                ("high", Param::Color(Some(BLUE))),
+                ("width", Param::Number(2.0)),
+                ("release", Param::Number(3.0)),
+                ("delay", Param::Number(0.0)),
+            ]
+        },
+        build: |p, s| {
+            audio::music_centroid(
+                audio(s, "centroid")?,
+                colour(p, "low"),
+                colour(p, "high"),
+                n(p, "width"),
+                n(p, "release"),
+                n(p, "delay"),
+            )
+        },
+        ranges: &[],
+    },
+    EffectInfo {
         name: "screen",
         summary: "follow the colour of the screen",
         needs: Some(Needs::Screen),
@@ -506,7 +531,7 @@ mod tests {
     fn describe_matches_the_python_shape() {
         let described = describe();
         let all = described.as_array().unwrap();
-        assert_eq!(all.len(), 15);
+        assert_eq!(all.len(), 16);
         let music = all.iter().find(|e| e["name"] == "music").unwrap();
         assert_eq!(music["needs"], "audio");
         assert_eq!(music["params"]["color"], Value::Null);

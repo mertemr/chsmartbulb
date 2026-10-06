@@ -128,6 +128,13 @@ _ENTRIES = [
         needs="audio",
     ),
     EffectInfo(
+        "centroid",
+        "blend two colours by whether the sound is bass-heavy or bright",
+        music.music_centroid,
+        {"low": RED, "high": BLUE, "width": 2.0, "release": 3.0, "delay": 0.0},
+        needs="audio",
+    ),
+    EffectInfo(
         "screen",
         "follow the colour of the screen",
         screen.screen_follow,

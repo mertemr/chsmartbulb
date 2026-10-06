@@ -632,6 +632,46 @@ def music_tempo(
     return effect
 
 
+def music_centroid(
+    source: AudioSource,
+    low: Color = RED,
+    high: Color = BLUE,
+    width: float = 2.0,
+    release: float = 3.0,
+    delay: float = 0.0,
+) -> Effect:
+    """Blend between two colours by where the sound's weight lies between bass and treble.
+
+    Bass-heavy sound shows ``low``, bright sound ``high``. The weight of real music seldom passes
+    the middle, so ``width`` stretches it. Brightness follows the loudness.
+    """
+    if width <= 0.0:
+        raise ValueError("width must be positive")
+    _set_delay(source, delay)
+    shown = 0.0
+    position = 0.0
+    last = 0.0
+
+    def effect(t: float) -> Color:
+        nonlocal shown, position, last
+        step = max(0.0, t - last)
+        last = t
+        levels = source.levels
+        total = levels.bass + levels.mid + levels.treble
+        faded = max(0.0, shown - release * step)
+        if total > 0.0:  # silence says nothing about the weight, keep the last one
+            target = min(1.0, max(0.0, width * (0.5 * levels.mid + levels.treble) / total))
+            if faded * faded < _DARK:
+                position = target
+            else:
+                position += (target - position) * (1.0 - math.exp(-step / _PAN_SMOOTHING))
+        shown = max(_loudness(levels), faded)
+        level = shown * shown
+        return low.mix(high, position).scaled(level) if level >= _DARK else OFF
+
+    return effect
+
+
 def music_spectrum(source: AudioSource, release: float = 3.0, delay: float = 0.0) -> Effect:
     """Bass drives red, mids green and treble blue; ``release`` is the fall rate per second."""
     _set_delay(source, delay)
