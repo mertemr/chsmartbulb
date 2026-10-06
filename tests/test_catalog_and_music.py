@@ -730,9 +730,10 @@ def test_tempo_ignores_beats_from_before_it_started():
     source.beat(at=10.0)  # beat before the effect exists
     source.now = 10.0
     tempo = catalog.create("tempo", {"slow": 80, "fast": 120, "smoothing": 0}, audio=source)
-    source.beat(at=10.5)  # 0.5 s later is fast, but previous was seen before the effect started
+    tempo(0.0)  # call once before the next beat: sets previous to 10.0 with the fix
+    source.beat(at=10.5)  # 0.5 s later would be fast, but previous was from before the effect started
     source.now = 10.5
-    assert tempo(0.5) != Color(g=160, b=255)  # not the fast colour yet (no interval taken)
-    source.beat(at=11.0)  # now 0.5 s from the first beat seen by the effect
+    assert tempo(0.5) != Color(g=160, b=255)  # not the fast colour yet (interval from before effect)
+    source.beat(at=11.0)  # now 0.5 s from the previous beat seen by the effect
     source.now = 11.0
     assert tempo(1.0) == Color(g=160, b=255)  # 120 bpm is the fast end

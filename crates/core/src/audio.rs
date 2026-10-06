@@ -740,11 +740,12 @@ mod tests {
         set(&now, 10.0);
         source.publish(loud, 10.0); // beat before the effect exists
         let mut effect = music_tempo(source.clone(), 80.0, 120.0, 0.0, 0.0, 0.5).unwrap();
+        effect(0.0); // trigger the first frame (no beat change yet, seen matches heard.beats)
         set(&now, 10.5);
-        source.publish(loud, 10.0); // 0.5 s later is fast, but previous was seen before the effect started
-        assert_ne!(effect(0.5), Color::rgb(0, 160, 255)); // not the fast colour yet (no interval taken)
+        source.publish(loud, 10.0); // first beat change seen by effect: previous is set to 10.0, no interval calculated
+        assert_ne!(effect(0.5), Color::rgb(0, 160, 255)); // not fast yet (first interval needs two beats after effect started)
         set(&now, 11.0);
-        source.publish(loud, 10.0); // now 0.5 s from the first beat seen by the effect
+        source.publish(loud, 10.0); // second beat change: now interval = (11.0 - 10.5) / 1 = 0.5s
         assert_eq!(effect(1.0), Color::rgb(0, 160, 255)); // 120 bpm is the fast end
     }
 }
