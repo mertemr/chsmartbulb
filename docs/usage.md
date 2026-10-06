@@ -121,6 +121,30 @@ same files and answers that protocol can host it, which is what keeps a port of 
 microcontroller possible. The server side is in `chsmartbulb.web` and uses the standard library
 only.
 
+### When the computer locks, sleeps or shuts down (Windows)
+
+The service can follow the computer it runs on. `--on-lock dim|off` sets what the light does
+while the screen is locked, `--on-sleep dim|off` while the computer sleeps or shuts down; the
+light goes back to what it showed, effect included, when the screen is unlocked or the computer
+wakes. Both default to `none`. Anything that changes the light (a page, a command) ends the away
+state, and the running effect, and with it the sound or screen capture, stops while it lasts.
+A locked screen dims to 10 %. Sleep leaves about a second to reach the bulb; if the write does not
+make it, the plan is restored after waking all the same.
+
+```bash
+chsmartbulb -t ble daemon --listen 8377 --web 0.0.0.0:8378 --on-lock dim --on-sleep off
+```
+
+To start it when you log in, a scheduled task does (put the token in `$CHSMARTBULB_TOKEN` and the
+address in `$CHSMARTBULB_ADDRESS` as user variables rather than in the command):
+
+```powershell
+schtasks /Create /TN chsmartbulb /SC ONLOGON /TR "C:\path	o\chsmartbulb.exe -t ble daemon --listen 8377 --web 0.0.0.0:8378 --on-lock dim --on-sleep off"
+```
+
+The sound needs no agent on the computer that runs the service: it listens to its own output while
+a sound effect plays.
+
 ### Audio from another machine
 
 The sound-reactive effects need to hear the music, which may be playing on a machine that has no
@@ -313,6 +337,10 @@ come out a dull white.
 ```bash
 chsmartbulb effect screen -s saturation=2 -s smoothing=0.4
 ```
+
+The capture checks the picture 15 times a second and slows to a third of that while the picture
+stands still, speeding up again at the first change; on one machine this took the capture of a
+2560×1440 monitor from about 11 % to about 4 % of a core.
 
 `smoothing` is how many seconds the light takes to follow a change and `saturation` multiplies the
 colourfulness (1 leaves it as on screen). The grey part of the colour goes to the white LEDs,

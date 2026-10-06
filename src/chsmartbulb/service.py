@@ -45,6 +45,8 @@ log = logging.getLogger(__name__)
 
 _LINK_ERRORS = (ConnectionFailed, NotConnected, TransportError)
 _MAX_RETRY_DELAY = 60.0
+AWAY_DIM = 0.1  # how bright a dimmed light stays while the computer is locked
+AWAY_REASONS = ("lock", "sleep", "shutdown")
 
 
 @dataclass
@@ -132,6 +134,7 @@ class BulbService:
         music_factory: Callable[[], AudioSource] = MusicSource,
         screen_factory: Callable[..., ScreenSource] = ScreenCapture,
         monitor_lister: Callable[[], list[dict[str, int]]] = list_monitors,
+        away_looks: Mapping[str, str] | None = None,
     ) -> None:
         self._bulb = bulb
         self._state_path = state_path
@@ -146,6 +149,9 @@ class BulbService:
             "audio": _Feed(RemoteAudio(), music_factory),
             "screen": _Feed(RemoteScreen(), screen_factory),
         }
+        # what the light does for each reason the computer is away: "dim" or "off"; a reason without one is ignored
+        self._away_looks = dict(away_looks or {})
+        self._away: str | None = None
         self._agents: dict[str, _Agent] = {}
         self._agent_ids = itertools.count(1)
         self._chosen: dict[tuple[str, str], int] = {}  # the monitor an agent of that name last chose
@@ -177,6 +183,8 @@ class BulbService:
             "timer": self._timer,
             "raw": self._raw,
             "monitor": self._monitor,
+            "away": self._go_away,
+            "back": self._come_back,
         }
 
     # --- lifecycle --------------------------------------------------------------------
@@ -284,6 +292,9 @@ class BulbService:
             return
         plan = self._plan
         try:
+            if self._away is not None:
+                await self._show_away()
+                return
             if self._bulb.brightness != plan.brightness:
                 await self._bulb.set_brightness(plan.brightness)
             if not plan.on:
@@ -325,6 +336,7 @@ class BulbService:
             "link": "connected" if connected else "connecting" if self._connecting else "waiting",
             "problem": None if connected else self._problem,
             "playing": self._playing,
+            "away": self._away,
             **{kind: "agent" if feed.agents else "local" for kind, feed in self._feeds.items()},
             "agents": {kind: feed.agents for kind, feed in self._feeds.items()},
             "agentInfo": {
@@ -351,7 +363,30 @@ class BulbService:
             for listener in tuple(self._listeners):
                 listener(state)
 
+    async def _show_away(self) -> None:
+        """The look of an away computer, written to the bulb only: the plan stays as it is."""
+        if self._away_looks.get(self._away or "") == "off" or not self._plan.on:
+            await self._bulb.turn_off()
+        else:
+            await self._bulb.set_brightness(min(self._plan.brightness, AWAY_DIM))
+
+    async def _go_away(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        reason = request["reason"]
+        if reason not in AWAY_REASONS:
+            raise ValueError(f"reason must be one of {', '.join(AWAY_REASONS)}")
+        if reason in self._away_looks:
+            self._away = reason  # a later reason replaces an earlier one: locked, then asleep
+            await self._apply()
+        return {}
+
+    async def _come_back(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        if self._away is not None:
+            self._away = None
+            await self._apply(fade=True)
+        return {}
+
     async def _commit(self, *, fade: bool = False, duration: float | None = None) -> None:
+        self._away = None  # somebody is using the light
         self._adopt_on_connect = False  # a request made while the bulb is away wins over what it shows later
         self._save()
         await self._apply(fade=fade, duration=duration)
@@ -571,6 +606,7 @@ class BulbService:
 
     async def _brightness(self, request: Mapping[str, Any]) -> dict[str, Any]:
         self._take_brightness({"brightness": request["level"]})
+        self._away = None
         self._adopt_on_connect = False
         self._save()
         if self._playing and self._bulb.is_connected:

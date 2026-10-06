@@ -140,3 +140,12 @@ def test_balance_keeps_hues_true_without_dimming_pure_colours():
     assert catalog.create("screen", {**params, "balance": 1}, screen=source)(0.0) == Color(r=48, g=100, w=100)
     with pytest.raises(ValueError, match="balance"):
         catalog.create("screen", {"balance": 2}, screen=source)
+
+
+def test_capture_slows_down_while_the_picture_stands_still():
+    assert screen.pace(0) == 1
+    assert screen.pace(screen.STILL_FRAMES - 1) == 1
+    assert screen.pace(screen.STILL_FRAMES) == 2
+    assert screen.pace(10_000) == screen.SLOWEST  # never slower than that, however long it stands
+    assert screen.similar(Color(100, 100, 100), Color(101, 99, 102))  # compression noise is not movement
+    assert not screen.similar(Color(100, 100, 100), Color(100, 100, 110))

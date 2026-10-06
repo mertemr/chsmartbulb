@@ -28,6 +28,8 @@ if TYPE_CHECKING:
 
 RATE = 15.0  # captures per second
 PRIMARY = 1  # mss numbers the monitors from 1; 0 is all of them together
+STILL_FRAMES = 15  # frames without a change before the capture starts to slow down (about a second)
+SLOWEST = 5  # at most this many frame times between two captures of a picture that stands still
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +38,16 @@ _VIVID = 4.0  # how much more a fully saturated pixel counts than a grey one
 # Red and blue, as fractions of the green value, that mix to the colour of the bulb's white LEDs.
 # Measured with a webcam on one unit (research/balance.py); the green LEDs are by far the weakest.
 _NEUTRAL = (0.48, 1.0, 0.23)
+
+
+def pace(still: int) -> int:
+    """How many frame times to wait before the next capture, after ``still`` unchanged frames."""
+    return min(1 + still // STILL_FRAMES, SLOWEST)
+
+
+def similar(a: Color, b: Color, tolerance: int = 2) -> bool:
+    """Whether two colours differ by no more than the noise of a compressed picture."""
+    return max(abs(a.r - b.r), abs(a.g - b.g), abs(a.b - b.b)) <= tolerance
 
 
 def list_monitors() -> list[dict[str, int]]:
@@ -190,8 +202,11 @@ class ScreenCapture:
                         raise LookupError(f"no monitor {self._monitor}; this machine has 1 to {len(monitors) - 1}")
                     area = monitors[self._monitor]
                     log.info("watching monitor %d (%dx%d)", self._monitor, area["width"], area["height"])
-                    while not stopping.wait(self._interval):
+                    still, last = 0, None
+                    while not stopping.wait(self._interval * pace(still)):
                         color = self._reduce(grabber.grab(area))
+                        still = still + 1 if last is not None and similar(color, last) else 0
+                        last = color
                         loop.call_soon_threadsafe(self._show, color)
             except Exception as exc:
                 error = exc

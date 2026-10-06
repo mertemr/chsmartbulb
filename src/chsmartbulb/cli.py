@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import catalog, client, effects, service, web
+from . import catalog, client, effects, presence, service, web
 from . import protocol as p
 from .bulb import ChSmartBulb
 from .color import NAMED, Color, parse_color
@@ -171,10 +171,34 @@ async def _daemon(args: argparse.Namespace) -> None:
             raise SmartBulbError(f"--{option} needs a token: use --token, set ${ENV_TOKEN} or pass --no-token")
     bulb = _bulb(args, auto_reconnect=False)
     state_path = None if args.no_state else service.default_state_path()
+    looks = {
+        **({"lock": args.on_lock} if args.on_lock != "none" else {}),
+        **({"sleep": args.on_sleep, "shutdown": args.on_sleep} if args.on_sleep != "none" else {}),
+    }
     daemon = service.BulbService(
-        bulb, state_path=state_path, fps=args.fps, music_factory=_music(args), screen_factory=_screen(args)
+        bulb,
+        state_path=state_path,
+        fps=args.fps,
+        music_factory=_music(args),
+        screen_factory=_screen(args),
+        away_looks=looks,
     )
-    await daemon.serve(args.socket, listen=args.listen, web=args.web, open_access=args.no_token, token=args.token)
+    watcher = None
+    tasks: set[asyncio.Task[Any]] = set()
+    if looks:
+
+        def tell(event: str) -> None:
+            task = asyncio.ensure_future(daemon.handle(presence.request_of(event)))
+            tasks.add(task)
+            task.add_done_callback(tasks.discard)
+
+        watcher = presence.PresenceWatcher(tell)
+        await watcher.start()
+    try:
+        await daemon.serve(args.socket, listen=args.listen, web=args.web, open_access=args.no_token, token=args.token)
+    finally:
+        if watcher is not None:
+            await watcher.stop()
 
 
 async def _agent(args: argparse.Namespace) -> None:
@@ -277,6 +301,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-token",
         action="store_true",
         help="let anyone who can reach --listen and --web use them, without a token",
+    )
+    cmd.add_argument(
+        "--on-lock",
+        choices=("none", "dim", "off"),
+        default="none",
+        help="what the light does while this computer's screen is locked, until it is unlocked (Windows)",
+    )
+    cmd.add_argument(
+        "--on-sleep",
+        choices=("none", "dim", "off"),
+        default="none",
+        help="what the light does while this computer sleeps or shuts down, until it is back (Windows)",
     )
 
     sub.add_parser("audio-agent", help="analyse this machine's audio and feed it to a service (see --host)")
