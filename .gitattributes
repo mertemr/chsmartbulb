@@ -7,6 +7,7 @@ research/results/** -diff
 docs/** linguist-documentation
 uv.lock linguist-generated
 
-# Built from web/ with `npm run build`; tracked so an install from git has the page.
+# Built from web/ with `pnpm build`; tracked so an install from git has the page.
 src/chsmartbulb/webui/** linguist-generated -diff
-web/package-lock.json linguist-generated
+web/pnpm-lock.yaml linguist-generated
+app/pnpm-lock.yaml linguist-generated

@@ -2,8 +2,8 @@ import { svelte } from '@sveltejs/vite-plugin-svelte'
 import tailwindcss from '@tailwindcss/vite'
 import { defineConfig } from 'vitest/config'
 
-// `npm run dev` serves the page with hot reload and passes /ws on to a running
-// `chsmartbulb daemon --web 8378`; `npm run build` writes the bundle the daemon serves.
+// `pnpm dev` serves the page with hot reload and passes /ws on to a running
+// `chsmartbulb daemon --web 8378`; `pnpm build` writes the bundle the daemon serves.
 const daemon = process.env.CHSMARTBULB_WEB ?? 'ws://127.0.0.1:8378'
 
 // `--mode app` builds the same page for the desktop and mobile app (app/), which talks

@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "io.github.mertemr.chsmartbulb",
   "build": {
-    "beforeDevCommand": "npm --prefix ../web run dev:app",
+    "beforeDevCommand": "pnpm --dir ../web run dev:app",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "npm --prefix ../web run build:app",
+    "beforeBuildCommand": "pnpm --dir ../web run build:app",
     "frontendDist": "../../web/dist-app"
   },
   "app": {

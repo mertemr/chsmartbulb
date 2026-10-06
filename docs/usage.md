@@ -110,9 +110,9 @@ but Python is needed to run it. To work on it:
 
 ```bash
 cd web
-npm install
-npm run dev      # hot reload on :5173, talking to a daemon started with --web 8378
-npm run build    # writes src/chsmartbulb/webui
+pnpm install
+pnpm dev      # hot reload on :5173, talking to a daemon started with --web 8378
+pnpm build    # writes src/chsmartbulb/webui
 ```
 
 The page talks to the service over a WebSocket at `/ws`, where each text message is one object of
