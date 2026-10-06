@@ -124,15 +124,20 @@ async fn lines(stream: TcpStream, mut session: Session) {
     loop {
         line.clear();
         let next = async {
-            match session.updates() {
+            let (updates, told) = session.watch();
+            match updates {
                 Some(updates) => tokio::select! {
                     read = reader.read_line(&mut line) => LineIncoming::Read(read),
                     changed = updates.changed() => match changed {
                         Ok(()) => LineIncoming::State(updates.borrow_and_update().clone()),
                         Err(_) => LineIncoming::Read(Ok(0)),
                     },
+                    Some(event) = told.recv() => LineIncoming::Told(event),
                 },
-                None => LineIncoming::Read(reader.read_line(&mut line).await),
+                None => tokio::select! {
+                    read = reader.read_line(&mut line) => LineIncoming::Read(read),
+                    Some(event) = told.recv() => LineIncoming::Told(event),
+                },
             }
         };
         match next.await {
@@ -153,6 +158,11 @@ async fn lines(stream: TcpStream, mut session: Session) {
                     break;
                 }
             }
+            LineIncoming::Told(event) => {
+                if send_line(&mut writer, &event).await.is_err() {
+                    break;
+                }
+            }
         }
     }
     session.close().await;
@@ -161,6 +171,7 @@ async fn lines(stream: TcpStream, mut session: Session) {
 enum LineIncoming {
     Read(std::io::Result<usize>),
     State(Value),
+    Told(Value),
 }
 
 fn event_message(state: Value) -> Value {
@@ -319,17 +330,20 @@ async fn websocket(
     ping.tick().await;
     let code = loop {
         let next = async {
-            match session.updates() {
+            let (updates, told) = session.watch();
+            match updates {
                 Some(updates) => tokio::select! {
                     message = receive(&mut frames) => Incoming::Message(message),
                     changed = updates.changed() => match changed {
                         Ok(()) => Incoming::State(updates.borrow_and_update().clone()),
                         Err(_) => Incoming::Message(Ok(None)),
                     },
+                    Some(event) = told.recv() => Incoming::Told(event),
                     _ = ping.tick() => Incoming::Ping,
                 },
                 None => tokio::select! {
                     message = receive(&mut frames) => Incoming::Message(message),
+                    Some(event) = told.recv() => Incoming::Told(event),
                     _ = ping.tick() => Incoming::Ping,
                 },
             }
@@ -342,6 +356,11 @@ async fn websocket(
             }
             Incoming::State(state) => {
                 if send_text(&mut write_half, &event_message(state)).await.is_err() {
+                    break None;
+                }
+            }
+            Incoming::Told(event) => {
+                if send_text(&mut write_half, &event).await.is_err() {
                     break None;
                 }
             }
@@ -382,6 +401,7 @@ async fn websocket(
 enum Incoming {
     Message(Result<Option<Received>, Closing>),
     State(Value),
+    Told(Value),
     Ping,
 }
 
