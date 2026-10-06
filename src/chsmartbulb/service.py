@@ -595,6 +595,10 @@ class BulbService:
         elif (listen is not None or web is not None) and not token:
             raise SmartBulbError("listening on the network needs a token")
         site = None if web is None else _web.Site(functools.partial(self.session, token=token), web_root)
+        if not hasattr(asyncio, "start_unix_server"):  # Windows has no Unix sockets
+            if listen is None and web is None:
+                raise SmartBulbError("this system has no local socket: give --listen and/or --web")
+            socket_path = None
         if socket_path is not None and await is_running(socket_path):
             raise SmartBulbError(f"a service is already listening on {socket_path}")
         await self.start()
