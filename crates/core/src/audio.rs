@@ -13,7 +13,7 @@ use std::time::Instant;
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 
-use crate::color::{Color, BLUE, OFF, RED, WHITE};
+use crate::color::{Color, BLUE, OFF, RED};
 use crate::effects::Effect;
 use crate::error::{invalid, Result};
 
@@ -668,6 +668,7 @@ pub const STEREO_RIGHT: Color = RED;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::color::WHITE;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn manual_clock() -> (Clock, Arc<AtomicU64>) {
