@@ -690,8 +690,8 @@ def test_tempo_colours_by_how_fast_the_beats_come():
     source.beat(at=10.5)
     source.now = 10.5
     assert tempo(0.5) == Color(g=160, b=255)  # 120 bpm is the fast end
-    source.beat(at=10.6)  # 0.1 s apart is no tempo
-    assert tempo(0.6) == Color(g=160, b=255)
+    source.beat(at=10.7)  # 0.2 s apart is no tempo
+    assert tempo(0.7) == Color(g=160, b=255)
     source.beat(at=12.6)  # neither is 2 s
     assert tempo(2.6) == Color(g=160, b=255)
     source.now = 30.0
@@ -722,3 +722,17 @@ def test_tempo_is_dark_in_silence_and_refuses_what_does_not_fit():
     for params in ({"slow": 120, "fast": 120}, {"slow": 160, "fast": 80}, {"smoothing": -1}, {"sensitivity": 2}):
         with pytest.raises(ValueError):
             catalog.create("tempo", params, audio=source)
+
+
+def test_tempo_ignores_beats_from_before_it_started():
+    source = FakeMusic()
+    source.levels = music.Levels(bass=1.0)
+    source.beat(at=10.0)  # beat before the effect exists
+    source.now = 10.0
+    tempo = catalog.create("tempo", {"slow": 80, "fast": 120, "smoothing": 0}, audio=source)
+    source.beat(at=10.5)  # 0.5 s later is fast, but previous was seen before the effect started
+    source.now = 10.5
+    assert tempo(0.5) != Color(g=160, b=255)  # not the fast colour yet (no interval taken)
+    source.beat(at=11.0)  # now 0.5 s from the first beat seen by the effect
+    source.now = 11.0
+    assert tempo(1.0) == Color(g=160, b=255)  # 120 bpm is the fast end

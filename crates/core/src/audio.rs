@@ -426,7 +426,7 @@ pub fn music_tempo(
     source.set_sensitivity(sensitivity)?;
     let mut estimate: Option<f64> = None; // seconds between beats
     let mut previous: Option<f64> = None;
-    let mut seen = 0u64;
+    let mut seen = source.heard().beats;
     let mut position = 0.5f64;
     let mut shown = 0.0f64;
     let mut last = 0.0;
@@ -685,8 +685,11 @@ mod tests {
         set(&now, 10.5);
         source.publish(loud, 10.0);
         assert_eq!(effect(0.5), Color::rgb(0, 160, 255)); // 120 bpm is the fast end
+        set(&now, 10.7);
+        source.publish(loud, 10.0); // 0.2 s apart is no tempo
+        assert_eq!(effect(0.7), Color::rgb(0, 160, 255));
         set(&now, 12.5);
-        source.publish(loud, 10.0); // 2 s apart is no tempo
+        source.publish(loud, 10.0); // neither is 2 s
         assert_eq!(effect(2.5), Color::rgb(0, 160, 255));
         set(&now, 30.0);
         assert_eq!(effect(20.0), Color::rgb(0, 160, 255)); // without beats the estimate holds
@@ -727,5 +730,21 @@ mod tests {
         {
             assert!(music_tempo(source.clone(), slow, fast, smoothing, 0.0, sensitivity).is_err());
         }
+    }
+
+    #[test]
+    fn tempo_ignores_beats_from_before_it_started() {
+        let (clock, now) = manual_clock();
+        let source = AudioSource::new(clock);
+        let loud = Levels { bass: 1.0, ..Levels::default() };
+        set(&now, 10.0);
+        source.publish(loud, 10.0); // beat before the effect exists
+        let mut effect = music_tempo(source.clone(), 80.0, 120.0, 0.0, 0.0, 0.5).unwrap();
+        set(&now, 10.5);
+        source.publish(loud, 10.0); // 0.5 s later is fast, but previous was seen before the effect started
+        assert_ne!(effect(0.5), Color::rgb(0, 160, 255)); // not the fast colour yet (no interval taken)
+        set(&now, 11.0);
+        source.publish(loud, 10.0); // now 0.5 s from the first beat seen by the effect
+        assert_eq!(effect(1.0), Color::rgb(0, 160, 255)); // 120 bpm is the fast end
     }
 }
