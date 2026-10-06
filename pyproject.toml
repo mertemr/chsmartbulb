@@ -91,7 +91,7 @@ python-platform = "linux"
 exclude = ["research"]
 
 [tool.ty.analysis]
-allowed-unresolved-imports = ["bleak", "bleak.**", "mss", "pyaudiowpatch", "soundcard"]
+allowed-unresolved-imports = ["bleak", "bleak.**", "chsmartbulb_native", "mss", "pyaudiowpatch", "soundcard"]
 
 [tool.uv]
 # uv's downloadable Python builds are compiled without Bluetooth sockets.

@@ -106,6 +106,8 @@ class Socket:
 
     async def receive(self) -> dict:
         opcode, payload = await self.frame()
+        while opcode == 0x9:  # a ping can come first when the interval is short
+            opcode, payload = await self.frame()
         assert opcode == 0x1
         return json.loads(payload)
 

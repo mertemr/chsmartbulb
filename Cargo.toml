@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/python", "app/plugin", "app/src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Mert Emirimam"]
+repository = "https://github.com/mertemr/chsmartbulb"
+
+[workspace.dependencies]
+chsmartbulb-core = { path = "crates/core" }
+async-trait = "0.1"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "2"
+tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

@@ -5,12 +5,15 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "dev:app": "vite --mode app",
+    "build:app": "vite build --mode app",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@tailwindcss/vite": "^4.3.3",
+    "@tauri-apps/api": "^2.12.1",
     "svelte": "^5.57.1",
     "svelte-check": "^4.7.6",
     "tailwindcss": "^4.3.3",

@@ -2,6 +2,9 @@
   import { app } from '../lib/app.svelte'
   import { cssColor } from '../lib/color'
 
+  // only the app build carries the part that offers this device to the network
+  const shareView = import.meta.env.MODE === 'app' ? import('./ShareNetwork.svelte') : null
+
   type Info = { name: string; model: string; version: string }
   type Tone = 'ok' | 'busy' | 'down' | 'idle'
 
@@ -31,7 +34,7 @@
 
   function feed(kind: 'audio' | 'screen'): { tone: Tone; text: string } {
     const agents = app.state?.agents?.[kind] ?? 0
-    if (!agents) return { tone: 'idle', text: 'the service’s own computer' }
+    if (!agents) return { tone: 'idle', text: app.mode === 'native' ? 'this device' : 'the service’s own computer' }
     return { tone: 'ok', text: agents > 1 ? `${agents} agents` : 'an agent on another computer' }
   }
 
@@ -40,10 +43,14 @@
     const online = app.link === 'online'
     const bulb = { connected: 'connected', connecting: 'connecting…', waiting: 'out of reach' }[state?.link ?? 'waiting']
     const others = (state?.watchers ?? 1) - 1
+    const bearer = app.mode === 'native' && app.setup?.device ? ` (${app.setup.device.bearer.toUpperCase()})` : ''
+    const own = app.mode === 'native'
     return [
-      { name: 'This page → service', tone: online ? 'ok' : 'busy', text: online ? 'connected' : 'reconnecting…' },
+      ...(own
+        ? []
+        : [{ name: 'This page → service', tone: online ? 'ok' : 'busy', text: online ? 'connected' : 'reconnecting…' } as const]),
       {
-        name: 'Service → bulb',
+        name: own ? 'Bluetooth' + bearer : 'Service → bulb',
         tone: state?.link === 'connected' ? 'ok' : state?.link === 'connecting' ? 'busy' : 'down',
         text: bulb,
       },
@@ -105,6 +112,12 @@
     {/if}
   </div>
 
+  {#if app.mode === 'native' && shareView}
+    {#await shareView then { default: ShareNetwork }}
+      <ShareNetwork />
+    {/await}
+  {/if}
+
   <div class="flex gap-2">
     <button
       type="button"
@@ -114,13 +127,13 @@
     >
       Refresh
     </button>
-    {#if app.signedIn}
+    {#if app.mode !== 'web' || app.signedIn}
       <button
         type="button"
         class="border-line h-11 flex-1 rounded-xl border text-sm font-medium"
         onclick={() => app.logout()}
       >
-        Sign out
+        {app.mode === 'native' ? 'Change bulb' : app.mode === 'remote' ? 'Leave this service' : 'Sign out'}
       </button>
     {/if}
   </div>

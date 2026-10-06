@@ -1,0 +1,19 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "chsmartbulb-native"
+description = "Rust core of chsmartbulb for Python: frame codec, sound analysis, effect catalog"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Mert Emirimam" }]
+classifiers = ["Programming Language :: Rust", "Programming Language :: Python :: 3"]
+dynamic = ["version"]
+
+[project.urls]
+Repository = "https://github.com/mertemr/chsmartbulb"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "chsmartbulb_native"

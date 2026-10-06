@@ -16,6 +16,7 @@ import asyncio
 import contextlib
 import logging
 import math
+import os
 import shutil
 import sys
 import threading
@@ -53,6 +54,20 @@ _PAN_SMOOTHING = 0.15  # seconds for the stereo position to settle
 _DARK = 1 / 255
 MAX_DELAY = 2.0
 _STREAM_POLL = 0.5  # seconds between checks that a callback-driven stream is still alive
+
+
+def _native() -> Any:
+    """The Rust analysis from ``chsmartbulb-native`` when it is installed, else ``None``.
+
+    ``CHSMARTBULB_NATIVE=0`` keeps to the Python one.
+    """
+    if os.environ.get("CHSMARTBULB_NATIVE", "1") == "0":
+        return None
+    try:
+        import chsmartbulb_native
+    except ImportError:
+        return None
+    return chsmartbulb_native
 
 
 def beat_ratio(sensitivity: float) -> float:
@@ -173,6 +188,9 @@ class MusicSource(_Published):
     A microphone hears the room as well as the music, so with ``mic`` the
     steady noise of the room is estimated and taken off each band. Without that
     the automatic gain would turn a quiet room's hiss into a full level.
+
+    With ``chsmartbulb-native`` installed the analysis runs in Rust and needs no
+    numpy; otherwise it runs here, with numpy.
     """
 
     def __init__(
@@ -187,13 +205,17 @@ class MusicSource(_Published):
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         super().__init__(clock)
+        self._rust: Any = _native()
+        self._np: Any = None
         try:
             import numpy
+
+            self._np = numpy
         except ImportError:
-            raise SmartBulbError("sound-reactive effects need numpy: pip install chsmartbulb[audio]") from None
+            if self._rust is None:
+                raise SmartBulbError("sound-reactive effects need numpy: pip install chsmartbulb[audio]") from None
         if backend not in BACKENDS:
             raise ValueError(f"unknown audio backend {backend!r}; choose from: {', '.join(BACKENDS)}")
-        self._np: Any = numpy
         self._device = device
         self._backend = backend
         self._mic = mic
@@ -214,15 +236,22 @@ class MusicSource(_Published):
         self._block = block
         self._channels = channels
         self._size = block * channels * 2  # bytes per analysis step
+        self._pending = bytearray()
+        if self._rust is not None:
+            self._analyzer = self._rust.Analyzer(rate, channels, self._mic, block)
+            return
         self._window = self._np.hanning(block)
         hz_per_bin = rate / block
         self._bins = [(max(1, round(lo / hz_per_bin)), round(hi / hz_per_bin)) for lo, hi in _BANDS_HZ]
         self._decay = 0.5 ** (block / rate / _GAIN_HALF_LIFE)
         self._room_rise = 2.0 ** (block / rate / _ROOM_DOUBLING)
-        self._pending = bytearray()
 
     def feed(self, pcm: bytes) -> None:
         """Consume signed 16-bit little-endian samples, interleaved when there are several channels."""
+        if self._rust is not None:
+            for (bass, mid, treble, balance), onset in self._analyzer.feed(pcm):
+                self._deliver(Levels(bass, mid, treble, balance), onset)
+            return
         self._pending += pcm
         size = self._size
         while len(self._pending) >= size:
@@ -257,10 +286,12 @@ class MusicSource(_Published):
         # fast enough to catch up with a sustained note before the gap allows another beat
         self._bass_average += 0.25 * (bass - self._bass_average)
 
-        result = Levels(*levels, balance=self._balance(frames))
+        self._deliver(Levels(*levels, balance=self._balance(frames)), onset)
+
+    def _deliver(self, levels: Levels, onset: float) -> None:
         if self.on_block is not None:
-            self.on_block(result, onset)
-        self._publish(result, onset)
+            self.on_block(levels, onset)
+        self._publish(levels, onset)
 
     def _above_room(self, band: int, value: float) -> float:
         """What of ``value`` stands out of the room's noise, which is the least the band has held lately."""

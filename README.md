@@ -38,6 +38,14 @@ Colour temperature is not supported by the hardware.
   <img src="docs/images/web-sound.png" alt="The effects that follow the sound" width="32%">
 </p>
 
+## App
+
+`app/` is a desktop and mobile app (Android, Linux, Windows) with the same interface. It talks to
+the bulb itself over BLE or Bluetooth Classic, so a phone can drive the bulb with nothing else
+running, and its sound effects can follow what the phone plays while the sound goes to another
+speaker. Builds come from the [`app` workflow](.github/workflows/app.yml); see
+[docs/app.md](docs/app.md).
+
 ## Install
 
 Linux with BlueZ, a paired bulb, and Python 3.10 or newer with Bluetooth socket support.
@@ -90,6 +98,7 @@ capture.
 - [docs/protocol.md](docs/protocol.md): frame format, commands, effects, open questions
 - [docs/device.md](docs/device.md): services, connection behaviour, BLE on Linux
 - [docs/research.md](docs/research.md): the experiments and the guesses that turned out wrong
+- [docs/app.md](docs/app.md): the app and the Rust port of the service
 - [research/](research): the scripts and raw results behind the above
 
 ## Tests

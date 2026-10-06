@@ -1,0 +1,34 @@
+[package]
+name = "chsmartbulb-core"
+description = "Protocol, effects and background service of the CHSmartBulb / BL08A speaker bulb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[features]
+# the service on the network: the line protocol and the web interface
+server = ["dep:base64", "dep:sha1_smol", "tokio/net", "tokio/io-util"]
+
+[dependencies]
+async-trait.workspace = true
+base64 = { version = "0.22", optional = true }
+sha1_smol = { version = "1", optional = true }
+log.workspace = true
+rustfft = "6"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "test-util", "net", "io-util", "macros"] }
+
+[[example]]
+name = "serve"
+required-features = ["server"]
+
+[[test]]
+name = "server"
+required-features = ["server"]

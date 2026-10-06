@@ -518,8 +518,43 @@ def test_missing_numpy_is_reported_clearly(monkeypatch):
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", no_numpy)
+    monkeypatch.setenv("CHSMARTBULB_NATIVE", "0")
     with pytest.raises(SmartBulbError, match="numpy"):
         music.MusicSource()
+
+
+def test_the_rust_analysis_needs_no_numpy_and_matches_the_python_one(monkeypatch):
+    pytest.importorskip("chsmartbulb_native")
+    pcm = tone(100, 0.3) + silence(0.2) + tone(3000, 0.2, amplitude=0.1) + (tone(80, 0.1) + silence(0.2)) * 3
+
+    def analysed(native):
+        monkeypatch.setenv("CHSMARTBULB_NATIVE", "1" if native else "0")
+        seen = []
+        source = music.MusicSource(channels=1, mic=False)
+        source.on_block = lambda levels, onset: seen.append((levels, onset))
+        source.feed(pcm)
+        return seen
+
+    rust, python = analysed(True), analysed(False)
+    assert len(rust) == len(python) > 20
+    for (levels, onset), (expected, expected_onset) in zip(rust, python, strict=True):
+        assert levels.bass == pytest.approx(expected.bass, abs=1e-9)
+        assert levels.mid == pytest.approx(expected.mid, abs=1e-9)
+        assert levels.treble == pytest.approx(expected.treble, abs=1e-9)
+        assert onset == pytest.approx(expected_onset, rel=1e-9, abs=1e-9)
+
+    real_import = __import__
+
+    def no_numpy(name, *args, **kwargs):
+        if name == "numpy":
+            raise ImportError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setenv("CHSMARTBULB_NATIVE", "1")
+    monkeypatch.setattr("builtins.__import__", no_numpy)
+    source = music.MusicSource()
+    source.feed(bytes(4 * music.BLOCK))
+    assert source.levels == music.Levels()
 
 
 def test_every_parameter_has_a_schema_that_admits_its_default():

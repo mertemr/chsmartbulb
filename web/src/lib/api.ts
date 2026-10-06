@@ -39,17 +39,25 @@ export type EffectInfo = {
 
 export type Reply = { ok: boolean; error?: string; [key: string]: unknown }
 
-type Handlers = {
+export type Handlers = {
   online(state: State): void
   state(state: State): void
   offline(): void
   denied(): void
 }
 
+/** What the page talks to the service through: a WebSocket, or the app's IPC. */
+export interface Link {
+  request(message: Record<string, unknown>): Promise<Reply>
+  /** Try again now instead of waiting out the retry delay, e.g. when the page is shown again. */
+  hurry(): void
+  close(): void
+}
+
 const FIRST_RETRY = 500
 const SLOWEST_RETRY = 8000
 
-export class Connection {
+export class Connection implements Link {
   #socket: WebSocket | null = null
   #pending = new Map<number, (reply: Reply) => void>()
   #nextId = 1
@@ -113,7 +121,6 @@ export class Connection {
     })
   }
 
-  /** Try again now instead of waiting out the retry delay, e.g. when the page is shown again. */
   hurry(): void {
     if (this.#closed || this.#socket?.readyState !== WebSocket.CLOSED) return
     clearTimeout(this.#timer)
