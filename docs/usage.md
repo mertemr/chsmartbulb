@@ -155,7 +155,7 @@ beats to the service, never the audio itself.
 chsmartbulb --host laptop.local --token SECRET audio-agent
 ```
 
-While an agent is connected, `music` and `spectrum` follow its feed; when it leaves, the service
+While an agent is connected, the sound effects follow its feed; when it leaves, the service
 goes back to listening on its own machine. `status` shows which one is in use.
 
 The agent needs only the `audio` extra, no Bluetooth. Capture uses `parec` where it exists and
@@ -251,6 +251,11 @@ A screen agent sends `{"cmd": "screen", "color": "#rrggbb"}` whenever the colour
 | `spectrum` | Bass, mids and treble as red, green and blue | `release`, `delay` |
 | `volume` | One colour, as bright as the sound is loud | `color`, `release`, `floor`, `delay` |
 | `stereo` | Blend two colours by where the sound sits | `left`, `right`, `width`, `release`, `delay` |
+| `beathue` | Turn the colour on every beat, glow with the bass | `step`, `decay`, `floor`, `saturation`, `delay`, `sensitivity` |
+| `tempo` | Warm for slow music, cool for fast, by the gaps between beats | `slow`, `fast`, `smoothing`, `delay`, `sensitivity` |
+| `centroid` | Blend two colours by whether the sound is bass-heavy or bright | `low`, `high`, `width`, `release`, `delay` |
+| `drop` | Open up as the music builds, flash when it comes back in | `color`, `flash`, `build`, `delay`, `sensitivity` |
+| `ambient` | A calm colour that breathes, an accent on the beats | `base`, `accent`, `period`, `decay`, `delay`, `sensitivity` |
 | `screen` | Follow the colour of the screen | `smoothing`, `saturation`, `white`, `balance` |
 
 ```bash
@@ -275,7 +280,7 @@ and keeps the last settings of every effect in the browser.
 
 ### Sound-reactive effects
 
-`music`, `spectrum`, `volume` and `stereo` analyse the audio on the computer, taken from the
+`music`, `spectrum`, `volume`, `stereo`, `beathue`, `tempo`, `centroid`, `drop` and `ambient` analyse the audio on the computer, taken from the
 monitor of the default output. It does not matter where the sound plays: laptop speakers,
 headphones, another Bluetooth device or the bulb itself. They need the `audio` extra (numpy) and
 the `parec` tool that comes with PulseAudio and PipeWire.
@@ -297,6 +302,28 @@ if the colour barely moves, lower it if it only ever shows the two ends.
 
 ```bash
 chsmartbulb effect stereo -s left=00ffff -s right=ff00ff -s width=6
+```
+
+`beathue` turns the colour by `step` degrees on every beat and never falls below `floor` of its
+brightness, where `music` goes dark between beats.
+
+`tempo` estimates the speed of the music from the gaps between beats and shows `slow` bpm as a warm
+colour and `fast` bpm as a cool one. It is only as good as the beat detection: music without a clear
+beat leaves it at the last tempo it heard.
+
+`centroid` shows `low` for bass-heavy sound and `high` for bright sound; `width` stretches the
+measured position, as it does for `stereo`.
+
+`drop` opens up slowly as the music gets louder and flashes in `color` for `flash` seconds when
+loud music comes back in after a lull, then settles to a glow. Its thresholds were tuned on synthetic
+signals, so on some music it flashes too often or not at all; `sensitivity` changes which beats count.
+
+`ambient` is a calm `base` colour breathing every `period` seconds, with `accent` flashing on each
+beat. In silence it keeps breathing.
+
+```bash
+chsmartbulb effect tempo -s slow=70 -s fast=140
+chsmartbulb effect ambient -s base=ff6e14 -s accent=ffffff
 ```
 
 `--audio-device SOURCE` picks a different source, for example the monitor of one particular
