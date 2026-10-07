@@ -12,12 +12,15 @@ use serde::de::DeserializeOwned;
 use tauri::plugin::PluginApi;
 use tauri::{AppHandle, Runtime};
 
-use crate::models::{likely, AudioInput, AudioRoute, Found, Readiness};
+pub use presence::Watcher as PresenceWatcher;
+
+use crate::models::{likely, AudioInput, AudioRoute, Found, Presence, Readiness};
 use crate::{Error, Result};
 
 #[cfg(any(target_os = "linux", windows))]
 mod audio;
 mod ble;
+mod presence;
 #[cfg(target_os = "linux")]
 mod rfcomm_linux;
 #[cfg(windows)]
@@ -98,6 +101,11 @@ impl<R: Runtime> Bluetooth<R> {
 
     pub async fn audio_route(&self) -> Result<AudioRoute> {
         Ok(AudioRoute { can_capture_playback: cfg!(any(target_os = "linux", windows)), ..AudioRoute::default() })
+    }
+
+    /// Report the computer being locked, put to sleep or shut down, until the watcher is dropped.
+    pub async fn watch_presence(&self, on_event: Arc<dyn Fn(Presence) + Send + Sync>) -> Result<PresenceWatcher> {
+        presence::watch(on_event).await
     }
 
     /// Desktop apps keep running in the background anyway.

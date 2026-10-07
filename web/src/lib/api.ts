@@ -20,6 +20,7 @@ export type State = {
   link: 'connected' | 'connecting' | 'waiting'
   problem: string | null // why the service could not reach the bulb, while it cannot
   playing: boolean
+  away?: 'lock' | 'sleep' | 'shutdown' | null // the computer is away: the bulb shows the away look, the plan waits
   on: boolean
   color: string
   brightness: number

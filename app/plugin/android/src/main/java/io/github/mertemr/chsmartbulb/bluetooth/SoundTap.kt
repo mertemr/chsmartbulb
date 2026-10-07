@@ -13,8 +13,33 @@ import app.tauri.plugin.Channel
 import app.tauri.plugin.JSObject
 
 private const val RATE = 44100
-/** Samples per message: about 23 ms, one analysis block on the Rust side. */
+/**
+ * What reaches the Rust side: every two frames averaged into one. The analysis looks at
+ * nothing above 8 kHz, so half the rate keeps all it needs and halves what crosses over.
+ */
+private const val SENT_RATE = RATE / 2
+/** Frames read at a time: about 23 ms, one analysis block on the Rust side once halved. */
 private const val FRAMES = 1024
+
+/** Average each pair of 16-bit little-endian frames of `size` bytes into one. */
+internal fun halve(buffer: ByteArray, size: Int, channels: Int): ByteArray {
+    val frame = channels * 2
+    val pairs = size / (2 * frame)
+    val out = ByteArray(pairs * frame)
+    for (pair in 0 until pairs) {
+        for (channel in 0 until channels) {
+            val first = 2 * pair * frame + channel * 2
+            val second = first + frame
+            val a = (buffer[first].toInt() and 0xff) or (buffer[first + 1].toInt() shl 8)
+            val b = (buffer[second].toInt() and 0xff) or (buffer[second + 1].toInt() shl 8)
+            val mean = (a + b) shr 1
+            val at = pair * frame + channel * 2
+            out[at] = mean.toByte()
+            out[at + 1] = (mean shr 8).toByte()
+        }
+    }
+    return out
+}
 
 /**
  * Hands 16-bit PCM to the Rust side, which turns it into band levels and beats.
@@ -42,9 +67,9 @@ class SoundTap private constructor(
                 if (size <= 0) continue
                 val event = JSObject()
                 event.put("event", "pcm")
-                event.put("rate", RATE)
+                event.put("rate", SENT_RATE)
                 event.put("channels", channels)
-                event.put("data", Base64.encodeToString(buffer, 0, size, Base64.NO_WRAP))
+                event.put("data", Base64.encodeToString(halve(buffer, size, channels), Base64.NO_WRAP))
                 channel.send(event)
             }
         }.also { it.start() }

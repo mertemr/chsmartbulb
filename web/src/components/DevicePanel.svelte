@@ -5,6 +5,9 @@
 
   // only the app build carries the part that offers this device to the network
   const shareView = import.meta.env.MODE === 'app' ? import('./ShareNetwork.svelte') : null
+  const awayView = import.meta.env.MODE === 'app' ? import('./AwaySettings.svelte') : null
+  // a phone is not locked away from its light the way a computer is
+  const desktop = $derived(['linux', 'windows'].includes(app.setup?.platform ?? ''))
 
   type Info = { name: string; model: string; version: string }
   type Tone = 'ok' | 'busy' | 'down' | 'idle'
@@ -111,6 +114,12 @@
       <p class="text-danger mt-2 text-sm" role="alert">{problem}</p>
     {/if}
   </div>
+
+  {#if app.mode === 'native' && desktop && awayView}
+    {#await awayView then { default: AwaySettings }}
+      <AwaySettings />
+    {/await}
+  {/if}
 
   {#if app.mode === 'native' && shareView}
     {#await shareView then { default: ShareNetwork }}

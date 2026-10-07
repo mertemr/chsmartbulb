@@ -30,7 +30,8 @@ export function feedOf(state: State | null, kind: Kind, own: boolean): Feed {
   const monitors = state?.localMonitors ?? []
   return {
     agent: false,
-    from: own ? 'this device' : 'the service’s computer',
+    // the app follows no screen of its own; only an agent brings one
+    from: own ? (kind === 'screen' ? 'no computer yet' : 'this device') : 'the service’s computer',
     monitor: kind === 'screen' && monitors.length > 1 ? (state?.localMonitor ?? null) : null,
   }
 }

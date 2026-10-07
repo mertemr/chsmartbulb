@@ -12,6 +12,8 @@ test('the machine itself feeds the light when no agent does', () => {
   expect(feedOf(base, 'audio', true)).toEqual({ agent: false, from: 'this device', monitor: null })
   expect(feedText('audio', feedOf(base, 'audio', false))).toBe('Sound: the service’s computer')
   expect(feedOf(null, 'screen', false).agent).toBe(false)
+  // the app has no screen of its own to follow
+  expect(feedText('screen', feedOf(base, 'screen', true))).toBe('Screen: no computer yet')
 })
 
 test('an agent is named, and its monitor shown only when it has a choice', () => {
