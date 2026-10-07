@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -194,9 +195,13 @@ def _coerce(key: str, default: Any, value: Any) -> Any:
         return tuple(value)  # the effect checks each step when it is built
     if isinstance(default, float) and not isinstance(value, bool):
         try:
-            return float(value)
+            result = float(value)
         except (TypeError, ValueError):
             pass
+        else:
+            if not math.isfinite(result):
+                raise ValueError(f"{key} must be a finite number, got {value!r}")
+            return result
     raise ValueError(f"{key} must be a number, got {value!r}")
 
 

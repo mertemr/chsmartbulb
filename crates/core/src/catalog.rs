@@ -477,7 +477,13 @@ fn coerce(key: &str, default: &Param, value: &Value) -> Result<Param> {
                 Value::String(text) => text.trim().parse::<f64>().ok(),
                 _ => None,
             };
-            number.map(Param::Number).ok_or_else(|| invalid(format!("{key} must be a number, got {value}")))
+            match number {
+                Some(number) if !number.is_finite() => {
+                    Err(invalid(format!("{key} must be a finite number, got {value}")))
+                }
+                Some(number) => Ok(Param::Number(number)),
+                None => Err(invalid(format!("{key} must be a number, got {value}"))),
+            }
         }
     }
 }
@@ -574,6 +580,15 @@ mod tests {
     }
 
     #[test]
+    fn numbers_must_be_finite() {
+        for bad in ["inf", "nan", "-inf"] {
+            assert!(resolve("beathue", Some(&params(json!({"decay": bad})))).is_err());
+        }
+        let resolved = resolve("beathue", Some(&params(json!({"decay": "2.5"})))).unwrap();
+        assert_eq!(resolved["decay"], Param::Number(2.5));
+    }
+
+    #[test]
     fn music_needs_a_source() {
         assert!(create("music", None, &Sources::default()).is_err());
         let sources = Sources { audio: Some(AudioSource::new(audio::monotonic())), screen: None };
@@ -586,6 +601,19 @@ mod tests {
         let described = describe();
         let all = described.as_array().unwrap();
         assert_eq!(all.len(), 18);
+        let names: Vec<&str> = all.iter().map(|e| e["name"].as_str().unwrap()).collect();
+        assert_eq!(
+            names,
+            [
+                "breathe", "hue", "pulse", "strobe", "candle", "palette", "police", "custom", "music", "spectrum",
+                "volume", "stereo", "beathue", "tempo", "centroid", "drop", "ambient", "screen"
+            ]
+        );
+        let range = |key: &str| all.iter().find_map(|e| e["schema"].get(key)).unwrap().clone();
+        assert_eq!(range("slow"), json!({"type": "number", "min": 40.0, "max": 240.0, "step": 1.0}));
+        assert_eq!(range("fast"), json!({"type": "number", "min": 40.0, "max": 240.0, "step": 1.0}));
+        assert_eq!(range("flash"), json!({"type": "number", "min": 0.1, "max": 2.0, "step": 0.05}));
+        assert_eq!(range("build"), json!({"type": "number", "min": 0.5, "max": 10.0, "step": 0.5}));
         let music = all.iter().find(|e| e["name"] == "music").unwrap();
         assert_eq!(music["needs"], "audio");
         assert_eq!(music["params"]["color"], Value::Null);
