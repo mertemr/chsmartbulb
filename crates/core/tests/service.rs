@@ -7,7 +7,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chsmartbulb_core::audio::AudioSource;
 use chsmartbulb_core::catalog::Needs;
-use chsmartbulb_core::service::{AudioCapture, Options, Service, Session};
+use chsmartbulb_core::service::{AudioCapture, AwayLook, Options, Service, Session};
 use chsmartbulb_core::sim::SimulatedBulb as FakeBulb;
 use chsmartbulb_core::{Bulb, Result};
 use serde_json::{json, Value};
@@ -357,5 +357,70 @@ async fn agents_say_who_they_are_and_which_monitor_they_choose() {
     let reply = ask(&service, json!({"cmd": "monitor", "agent": id, "index": 1})).await;
     assert_eq!(reply["error"], "that agent cannot change its monitor");
     silent.close().await;
+    service.close().await;
+}
+
+fn away_options() -> Options {
+    let looks = [("lock", AwayLook::Dim), ("sleep", AwayLook::Off)];
+    Options { away_looks: looks.into_iter().map(|(reason, look)| (reason.to_string(), look)).collect(), ..options() }
+}
+
+#[tokio::test]
+async fn away_dims_or_turns_off_and_back_restores_the_plan() {
+    let fake = FakeBulb::new();
+    let service = attached(&fake, away_options()).await;
+    ask(&service, json!({"cmd": "color", "color": "#ff0064", "brightness": 0.5})).await;
+
+    assert_eq!(ask(&service, json!({"cmd": "away", "reason": "lock"})).await["ok"], true);
+    let red = fake.last_light().r;
+    assert!(0 < red && red < 40, "dimmed, not off: {red}");
+    assert_eq!(ask(&service, json!({"cmd": "status"})).await["away"], "lock");
+
+    ask(&service, json!({"cmd": "away", "reason": "sleep"})).await; // a later reason replaces the earlier one
+    assert_eq!(fake.with(|s| s.channels), [0; 5]);
+
+    assert_eq!(ask(&service, json!({"cmd": "back"})).await["ok"], true);
+    let last = fake.last_light();
+    assert_eq!((last.r, last.b), (128, 50)); // the plan, as it was
+    let status = ask(&service, json!({"cmd": "status"})).await;
+    assert_eq!(
+        (status["away"].clone(), status["color"].clone(), status["on"].clone()),
+        (Value::Null, json!("#ff0064"), json!(true))
+    );
+    service.close().await;
+}
+
+#[tokio::test]
+async fn away_stops_the_running_effect_and_back_resumes_it() {
+    let fake = FakeBulb::new();
+    let service = attached(&fake, away_options()).await;
+    ask(&service, json!({"cmd": "effect", "name": "hue"})).await;
+    assert_eq!(service.state()["playing"], true);
+    ask(&service, json!({"cmd": "away", "reason": "lock"})).await;
+    assert_eq!(service.state()["playing"], false);
+    ask(&service, json!({"cmd": "back"})).await;
+    assert_eq!(service.state()["playing"], true);
+    service.close().await;
+}
+
+#[tokio::test]
+async fn a_request_ends_away_and_odd_away_requests_do_nothing_harmful() {
+    let fake = FakeBulb::new();
+    let service = attached(&fake, away_options()).await;
+    ask(&service, json!({"cmd": "color", "color": "#00ff00"})).await;
+    ask(&service, json!({"cmd": "away", "reason": "lock"})).await;
+    ask(&service, json!({"cmd": "color", "color": "#0000ff"})).await; // somebody uses the light
+    assert_eq!(ask(&service, json!({"cmd": "status"})).await["away"], Value::Null);
+    assert_eq!(fake.last_light().b, 255);
+
+    let written = fake.sent();
+    assert_eq!(ask(&service, json!({"cmd": "back"})).await["ok"], true); // nothing to come back from
+    assert_eq!(fake.sent(), written);
+
+    assert_eq!(ask(&service, json!({"cmd": "away", "reason": "shutdown"})).await["ok"], true); // no look: ignored
+    assert_eq!(ask(&service, json!({"cmd": "status"})).await["away"], Value::Null);
+    let bad = ask(&service, json!({"cmd": "away", "reason": "boredom"})).await;
+    assert_eq!(bad["ok"], false);
+    assert!(bad["error"].as_str().unwrap().contains("reason"));
     service.close().await;
 }
