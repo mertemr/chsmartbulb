@@ -54,12 +54,13 @@ because `scaled()` never rounds a lit channel to zero; `ambient` is the one that
 - `energy` = largest band. Two averages of it, `fast` (time constant `build` seconds) and `slow`
   (8 s), both with `1 - exp(-step / tau)`.
 - A *lull* is `fast < 0.35 * slow` with `slow > 0.05`. It sets `lulled` once it has lasted 0.5 s.
-- `lulled` also clears, with no flash, once the lull is over and `fast >= slow`: the music came back
-  gently, so a beat minutes later is not a drop.
+- `lulled` is remembered for 30 s (`LULL_MEMORY`) once the lull is over, then clears with no flash,
+  so a build-up of up to that long still ends in a drop, and a beat much later is not one.
 - A *drop* is a new beat while `lulled` and `energy >= 0.6`. It clears `lulled` and starts the
   flash: for `flash` seconds the light alternates `color` at full and dark at 8 Hz, then returns.
   A beat that comes with several others between two frames still counts once.
-- Outside the flash: `level = 0.15 + 0.6 * fast`, and `color` scaled by it; `OFF` below `DARK`.
+- Outside the flash: `glow = 0.15 * min(1, slow / 0.05) + 0.6 * fast`, and `color` scaled by it;
+  `OFF` below `DARK`, so it goes dark in long silence but keeps a dim glow during a lull.
 - Params: `color` white, `flash` 0.4 (0.1..2, step 0.05), `build` 3.0 (0.5..10, step 0.5), `delay`,
   `sensitivity`. These thresholds are first guesses from synthetic tests; they may need tuning
   against real tracks, which a test cannot do.

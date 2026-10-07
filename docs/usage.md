@@ -280,9 +280,9 @@ and keeps the last settings of every effect in the browser.
 
 ### Sound-reactive effects
 
-`music`, `spectrum`, `volume`, `stereo`, `beathue`, `tempo`, `centroid`, `drop` and `ambient` analyse the audio on the computer, taken from the
-monitor of the default output. It does not matter where the sound plays: laptop speakers,
-headphones, another Bluetooth device or the bulb itself. They need the `audio` extra (numpy) and
+`music`, `spectrum`, `volume`, `stereo`, `beathue`, `tempo`, `centroid`, `drop` and `ambient`
+analyse the audio on the computer, taken from the monitor of the default output. It does not matter
+where the sound plays: laptop speakers, headphones, another Bluetooth device or the bulb itself. They need the `audio` extra (numpy) and
 the `parec` tool that comes with PulseAudio and PipeWire.
 
 `music` changes hue on every beat unless it is given a colour. `sensitivity` (0 to 1, default 0.5)
@@ -309,14 +309,17 @@ brightness, where `music` goes dark between beats.
 
 `tempo` estimates the speed of the music from the gaps between beats and shows `slow` bpm as a warm
 colour and `fast` bpm as a cool one. It is only as good as the beat detection: music without a clear
-beat leaves it at the last tempo it heard.
+beat leaves it at the last tempo it heard. Brightness follows the loudness.
 
 `centroid` shows `low` for bass-heavy sound and `high` for bright sound; `width` stretches the
-measured position, as it does for `stereo`.
+measured position, as it does for `stereo`. Brightness follows the loudness, and `release` is how
+fast it falls.
 
 `drop` opens up slowly as the music gets louder and flashes in `color` for `flash` seconds when
-loud music comes back in after a lull, then settles to a glow. Its thresholds were tuned on synthetic
-signals, so on some music it flashes too often or not at all; `sensitivity` changes which beats count.
+loud music comes back in after a lull, then settles to a glow. It remembers a lull for 30 seconds,
+so a build-up of up to that long still ends in a flash, and it goes dark in long silence. Its
+thresholds were tuned on synthetic signals, so on some music it flashes too often or not at all;
+`sensitivity` changes which beats count.
 
 `ambient` is a calm `base` colour breathing every `period` seconds, with `accent` flashing on each
 beat. In silence it keeps breathing.
