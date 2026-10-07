@@ -60,7 +60,35 @@ def test_catalog_rejects_unknown_names_parameters_and_values():
 
 def test_describe_is_plain_data_covering_every_effect():
     listing = catalog.describe()
-    assert {entry["name"] for entry in listing} == set(catalog.CATALOG)
+    assert [entry["name"] for entry in listing] == [
+        "breathe",
+        "hue",
+        "pulse",
+        "strobe",
+        "candle",
+        "palette",
+        "police",
+        "custom",
+        "music",
+        "spectrum",
+        "volume",
+        "stereo",
+        "beathue",
+        "tempo",
+        "centroid",
+        "drop",
+        "ambient",
+        "screen",
+    ]
+    schema = {key: spec for entry in listing for key, spec in entry["schema"].items()}
+    for key, (low, high, step) in {
+        "slow": (40.0, 240.0, 1.0),
+        "fast": (40.0, 240.0, 1.0),
+        "flash": (0.1, 2.0, 0.05),
+        "build": (0.5, 10.0, 0.5),
+        "step": (1.0, 180.0, 1.0),
+    }.items():
+        assert schema[key] == {"type": "number", "min": low, "max": high, "step": step}
     breathe = next(entry for entry in listing if entry["name"] == "breathe")
     assert breathe["params"] == {"color": "#ff0000", "period": 4.0, "floor": 0.0}
     needs = {entry["name"]: entry["needs"] for entry in listing if entry["needs"]}
@@ -803,11 +831,43 @@ def test_drop_ignores_music_that_comes_back_gently():
     source.levels = music.Levels()
     t, _ = advance(effect, t, 8)  # a lull
     source.levels = music.Levels(bass=0.3)
-    t, _ = advance(effect, t, 30)  # back, but quietly: no beat, no flash
+    t, _ = advance(effect, t, 45)  # back, but quietly: the lull is forgotten after 30 s
     source.levels = music.Levels(bass=1.0)
     source.beat(at=t + 0.05)
     t += 0.05
     assert effect(t).g < 255  # an ordinary beat much later is not a drop
+
+
+def test_drop_still_flashes_after_a_build_up():
+    source = FakeMusic()
+    effect = catalog.create("drop", {"color": "00ff00"}, audio=source)
+    source.levels = music.Levels(bass=1.0)
+    t, _ = advance(effect, 0.0, 20)
+    source.levels = music.Levels()
+    t, _ = advance(effect, t, 8)  # a lull
+    source.levels = music.Levels(bass=0.5)
+    t, _ = advance(effect, t, 12)  # building back up, no beats
+    source.levels = music.Levels(bass=1.0)
+    source.beat(at=t + 0.05)
+    t += 0.05
+    assert effect(t) == Color(g=255)  # the lull is still remembered: this is the drop
+
+
+def test_drop_goes_dark_in_long_silence():
+    source = FakeMusic()
+    effect = catalog.create("drop", {"color": "00ff00"}, audio=source)
+    source.levels = music.Levels(bass=1.0)
+    t, _ = advance(effect, 0.0, 20)
+    source.levels = music.Levels()
+    t, frame = advance(effect, t, 120)
+    assert frame == Color()
+
+
+def test_numbers_must_be_finite():
+    for bad in ("inf", "nan", float("inf"), float("nan")):
+        with pytest.raises(ValueError, match="finite"):
+            catalog.resolve("beathue", {"decay": bad})
+    assert catalog.resolve("beathue", {"decay": "2.5"})["decay"] == 2.5
 
 
 def test_drop_refuses_what_does_not_fit():

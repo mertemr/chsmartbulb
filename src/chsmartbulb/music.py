@@ -60,6 +60,7 @@ _DROP_SLOW = 8.0  # seconds; the long average the lull is measured against
 _LULL_RATIO = 0.35  # a lull: the short average under this share of the long one
 _LULL_FLOOR = 0.05  # and the long one above this, so there was something to fall from
 _LULL_HOLD = 0.5  # seconds a lull must last
+_LULL_MEMORY = 30.0  # seconds `lulled` is remembered once the lull is over
 _DROP_ENERGY = 0.6  # a drop's beat must be this loud
 _FLASH_HZ = 8.0
 _PAN_SMOOTHING = 0.15  # seconds for the stereo position to settle
@@ -701,13 +702,14 @@ def music_drop(
     fast = 0.0
     slow = 0.0
     lull = 0.0
+    since = 0.0
     lulled = False
     seen = source.beats
     began = -math.inf
     last = 0.0
 
     def effect(t: float) -> Color:
-        nonlocal fast, slow, lull, lulled, seen, began, last
+        nonlocal fast, slow, lull, since, lulled, seen, began, last
         step = max(0.0, t - last)
         last = t
         energy = _loudness(source.levels)
@@ -715,20 +717,26 @@ def music_drop(
         slow += (energy - slow) * (1.0 - math.exp(-step / _DROP_SLOW))
         if slow > _LULL_FLOOR and fast < _LULL_RATIO * slow:
             lull += step
+            since = 0.0
             if lull >= _LULL_HOLD:
                 lulled = True
         else:
             lull = 0.0
-            if fast >= slow:
-                lulled = False  # the music came back gently: a later beat is not a drop
+            if lulled:
+                since += step
+                if since >= _LULL_MEMORY:  # the lull is long forgotten: a beat now is not a drop
+                    lulled = False
+                    since = 0.0
         arrived = source.beats != seen
         seen = source.beats
         if arrived and lulled and energy >= _DROP_ENERGY:
             lulled = False
+            since = 0.0
             began = t
         if t - began < flash:
             return color if ((t - began) * _FLASH_HZ) % 1.0 < 0.5 else OFF
-        return color.scaled(0.15 + 0.6 * fast)
+        glow = 0.15 * min(1.0, slow / _LULL_FLOOR) + 0.6 * fast
+        return color.scaled(glow) if glow >= _DARK else OFF
 
     return effect
 

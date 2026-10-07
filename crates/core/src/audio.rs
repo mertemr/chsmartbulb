@@ -55,6 +55,8 @@ const LULL_RATIO: f64 = 0.35;
 const LULL_FLOOR: f64 = 0.05;
 /// Seconds a lull must last.
 const LULL_HOLD: f64 = 0.5;
+/// Seconds `lulled` is remembered once the lull is over.
+const LULL_MEMORY: f64 = 30.0;
 /// A drop's beat must be this loud.
 const DROP_ENERGY: f64 = 0.6;
 const FLASH_HZ: f64 = 8.0;
@@ -545,6 +547,7 @@ pub fn music_drop(
     let mut fast = 0.0f64;
     let mut slow = 0.0f64;
     let mut lull = 0.0f64;
+    let mut since = 0.0f64;
     let mut lulled = false;
     let mut seen = source.heard().beats;
     let mut began = f64::NEG_INFINITY;
@@ -558,25 +561,37 @@ pub fn music_drop(
         slow += (energy - slow) * (1.0 - (-step / DROP_SLOW).exp());
         if slow > LULL_FLOOR && fast < LULL_RATIO * slow {
             lull += step;
+            since = 0.0;
             if lull >= LULL_HOLD {
                 lulled = true;
             }
         } else {
             lull = 0.0;
-            if fast >= slow {
-                lulled = false; // the music came back gently: a later beat is not a drop
+            if lulled {
+                since += step;
+                if since >= LULL_MEMORY {
+                    // the lull is long forgotten: a beat now is not a drop
+                    lulled = false;
+                    since = 0.0;
+                }
             }
         }
         let arrived = heard.beats != seen;
         seen = heard.beats;
         if arrived && lulled && energy >= DROP_ENERGY {
             lulled = false;
+            since = 0.0;
             began = t;
         }
         if t - began < flash {
             return if ((t - began) * FLASH_HZ).rem_euclid(1.0) < 0.5 { color } else { OFF };
         }
-        color.scaled(0.15 + 0.6 * fast)
+        let glow = 0.15 * (slow / LULL_FLOOR).min(1.0) + 0.6 * fast;
+        if glow >= DARK {
+            color.scaled(glow)
+        } else {
+            OFF
+        }
     }))
 }
 
@@ -966,11 +981,43 @@ mod tests {
         source.publish(Levels::default(), 0.0);
         advance(&mut effect, &mut t, 8.0); // a lull
         source.publish(Levels { bass: 0.3, ..Levels::default() }, 0.0);
-        advance(&mut effect, &mut t, 30.0); // back, but quietly
+        advance(&mut effect, &mut t, 45.0); // back, but quietly: the lull is forgotten after 30 s
         t += 0.05;
         set(&now, t);
         source.publish(loud, 10.0);
         assert!(effect(t).g < 255); // an ordinary beat much later is not a drop
+    }
+
+    #[test]
+    fn drop_still_flashes_after_a_build_up() {
+        let (clock, now) = manual_clock();
+        let source = AudioSource::new(clock);
+        let loud = Levels { bass: 1.0, ..Levels::default() };
+        let green = Color::rgb(0, 255, 0);
+        let mut effect = music_drop(source.clone(), green, 0.4, 3.0, 0.0, 0.5).unwrap();
+        let mut t = 0.0;
+        source.publish(loud, 0.0);
+        advance(&mut effect, &mut t, 20.0);
+        source.publish(Levels::default(), 0.0);
+        advance(&mut effect, &mut t, 8.0); // a lull
+        source.publish(Levels { bass: 0.5, ..Levels::default() }, 0.0);
+        advance(&mut effect, &mut t, 12.0); // building back up, no beats
+        t += 0.05;
+        set(&now, t);
+        source.publish(loud, 10.0);
+        assert_eq!(effect(t), green); // the lull is still remembered: this is the drop
+    }
+
+    #[test]
+    fn drop_goes_dark_in_long_silence() {
+        let (clock, _) = manual_clock();
+        let source = AudioSource::new(clock);
+        let mut effect = music_drop(source.clone(), Color::rgb(0, 255, 0), 0.4, 3.0, 0.0, 0.5).unwrap();
+        let mut t = 0.0;
+        source.publish(Levels { bass: 1.0, ..Levels::default() }, 0.0);
+        advance(&mut effect, &mut t, 20.0);
+        source.publish(Levels::default(), 0.0);
+        assert_eq!(advance(&mut effect, &mut t, 120.0), OFF);
     }
 
     #[test]
