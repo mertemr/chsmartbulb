@@ -32,6 +32,7 @@ export type State = {
   agentInfo?: { audio: AgentInfo[]; screen: AgentInfo[] } // who they are, from a service that knows
   localMonitors?: { index: number; width: number; height: number }[] // the service's own screens, when it can capture
   localMonitor?: number
+  localScreenAsks?: boolean // the service's desktop has its user choose the screen (Wayland); `monitor` makes it ask again
   watchers: number // clients following the state, this page included
 }
 
