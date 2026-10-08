@@ -4,7 +4,7 @@
 //! objects as the Python service's socket protocol, so the web interface and the
 //! agents talk to either one without knowing which.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{json, Map, Value};
-use tokio::sync::{watch, Mutex, Notify};
+use tokio::sync::{mpsc, watch, Mutex, Notify};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
@@ -84,6 +84,20 @@ impl Plan {
     }
 }
 
+/// How bright a dimmed light stays while the computer is locked.
+pub const AWAY_DIM: f64 = 0.1;
+/// Why a computer can be away.
+pub const AWAY_REASONS: [&str; 3] = ["lock", "sleep", "shutdown"];
+
+/// What the light does while the computer is away for some reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AwayLook {
+    /// Down to [`AWAY_DIM`], keeping the colour.
+    Dim,
+    Off,
+}
+
 #[derive(Debug, Clone)]
 pub struct Options {
     pub state_path: Option<PathBuf>,
@@ -91,6 +105,8 @@ pub struct Options {
     pub retry_delay: Duration,
     pub poll_interval: Duration,
     pub save_delay: Duration,
+    /// The look for each reason the computer is away; a reason without one is ignored.
+    pub away_looks: HashMap<String, AwayLook>,
 }
 
 impl Default for Options {
@@ -101,6 +117,7 @@ impl Default for Options {
             retry_delay: Duration::from_secs(5),
             poll_interval: Duration::from_secs(2),
             save_delay: Duration::from_secs(1),
+            away_looks: HashMap::new(),
         }
     }
 }
@@ -115,6 +132,36 @@ struct Feeds {
     screen_running: bool,
 }
 
+/// Another machine feeding its sound or screen, as far as it said who it is.
+struct Agent {
+    id: String,
+    kind: Needs,
+    name: Option<String>,
+    /// `{"index", "width", "height"}` for each monitor of a screen agent.
+    monitors: Vec<Value>,
+    monitor: Option<i64>,
+    /// What the service tells this agent.
+    events: mpsc::UnboundedSender<Value>,
+}
+
+impl Agent {
+    fn info(&self) -> Value {
+        json!({"id": self.id, "name": self.name, "monitors": self.monitors, "monitor": self.monitor})
+    }
+
+    fn has_monitor(&self, index: i64) -> bool {
+        index == 0 || self.monitors.iter().any(|area| area["index"] == index) // 0 is every monitor together
+    }
+}
+
+#[derive(Default)]
+struct Agents {
+    counter: usize,
+    list: Vec<Agent>,
+    /// The monitor an agent of that kind and name last chose.
+    chosen: HashMap<(Needs, String), i64>,
+}
+
 struct Inner {
     bulb: Arc<Bulb>,
     options: Options,
@@ -123,6 +170,8 @@ struct Inner {
     /// No remembered state yet: take over what the bulb shows.
     adopt_on_connect: AtomicBool,
     effect_task: StdMutex<Option<JoinHandle<()>>>,
+    /// An effect is playing; cleared when it is stopped or ends by itself.
+    effect_running: AtomicBool,
     /// One request changes the plan at a time.
     lock: Mutex<()>,
     supervisor: StdMutex<Option<JoinHandle<()>>>,
@@ -132,11 +181,15 @@ struct Inner {
     state: watch::Sender<Value>,
     watchers: AtomicUsize,
     feeds: StdMutex<Feeds>,
+    agents: StdMutex<Agents>,
     remote_audio: Arc<AudioSource>,
     remote_screen: Arc<ScreenSource>,
     local_audio: Option<Arc<dyn AudioCapture>>,
     local_screen: Option<Arc<dyn ScreenCapture>>,
     pending_save: StdMutex<Option<JoinHandle<()>>>,
+    away_looks: StdMutex<HashMap<String, AwayLook>>,
+    /// Why the computer is away, while it is: the light shows the away look, the plan stays as it is.
+    away: StdMutex<Option<String>>,
 }
 
 fn locked<T>(mutex: &StdMutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -195,6 +248,7 @@ impl Builder {
 
     pub fn build(self) -> Service {
         let (state, _) = watch::channel(Value::Null);
+        let away_looks = self.options.away_looks.clone();
         let inner = Arc::new(Inner {
             bulb: self.bulb,
             options: self.options,
@@ -203,6 +257,7 @@ impl Builder {
             plan: StdMutex::new(Plan::default()),
             adopt_on_connect: AtomicBool::new(true),
             effect_task: StdMutex::new(None),
+            effect_running: AtomicBool::new(false),
             lock: Mutex::new(()),
             supervisor: StdMutex::new(None),
             connecting: AtomicBool::new(false),
@@ -211,10 +266,13 @@ impl Builder {
             state,
             watchers: AtomicUsize::new(0),
             feeds: StdMutex::new(Feeds::default()),
+            agents: StdMutex::new(Agents::default()),
             remote_screen: ScreenSource::new(),
             local_audio: self.local_audio,
             local_screen: self.local_screen,
             pending_save: StdMutex::new(None),
+            away_looks: StdMutex::new(away_looks),
+            away: StdMutex::new(None),
         });
         inner.state.send_replace(inner.state_json());
         Service { inner }
@@ -321,10 +379,25 @@ impl Service {
         reply
     }
 
-    /// An agent of `kind` came in: effects that follow it switch to its feed.
-    pub async fn agent_joined(&self, kind: Needs) {
-        {
+    /// An agent of `kind` came in: effects that follow it switch to its feed. `events` is how the
+    /// service reaches it; the result names it for [`Service::agent_hello`] and [`Service::agent_left`].
+    pub async fn agent_joined(&self, kind: Needs, events: mpsc::UnboundedSender<Value>) -> String {
+        let id = {
             let _guard = self.inner.lock.lock().await;
+            let id = {
+                let mut agents = locked(&self.inner.agents);
+                agents.counter += 1;
+                let id = format!("{}-{}", kind.as_str(), agents.counter);
+                agents.list.push(Agent {
+                    id: id.clone(),
+                    kind,
+                    name: None,
+                    monitors: Vec::new(),
+                    monitor: None,
+                    events,
+                });
+                id
+            };
             {
                 let mut feeds = locked(&self.inner.feeds);
                 match kind {
@@ -334,13 +407,50 @@ impl Service {
             }
             log::info!("{} agent connected", kind.as_str());
             self.inner.feed_changed(kind).await;
+            id
+        };
+        self.inner.notify();
+        id
+    }
+
+    /// An agent says who it is; one that chose a monitor before gets that one back.
+    pub fn agent_hello(&self, id: &str, hello: &Value) {
+        let restore = {
+            let mut agents = locked(&self.inner.agents);
+            let chosen = agents.chosen.clone();
+            let Some(agent) = agents.list.iter_mut().find(|agent| agent.id == id) else { return };
+            agent.name = hello
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .map(|name| name.chars().take(64).collect());
+            let mut restore = None;
+            if agent.kind == Needs::Screen {
+                agent.monitors = hello
+                    .get("monitors")
+                    .and_then(Value::as_array)
+                    .map(|areas| areas.iter().filter_map(monitor_area).collect())
+                    .unwrap_or_default();
+                agent.monitor = hello.get("monitor").and_then(Value::as_i64);
+                let earlier = agent.name.clone().and_then(|name| chosen.get(&(agent.kind, name)).copied());
+                let changed = |index: &i64| Some(*index) != agent.monitor && agent.has_monitor(*index);
+                if let Some(index) = earlier.filter(changed) {
+                    agent.monitor = Some(index);
+                    restore = Some((agent.events.clone(), index));
+                }
+            }
+            restore
+        };
+        if let Some((events, index)) = restore {
+            let _ = events.send(json!({"event": "monitor", "monitor": index}));
         }
         self.inner.notify();
     }
 
-    pub async fn agent_left(&self, kind: Needs) {
+    pub async fn agent_left(&self, kind: Needs, id: &str) {
         {
             let _guard = self.inner.lock.lock().await;
+            locked(&self.inner.agents).list.retain(|agent| agent.id != id);
             let gone = {
                 let mut feeds = locked(&self.inner.feeds);
                 let agents = match kind {
@@ -390,12 +500,17 @@ impl Service {
     }
 
     /// The source a local capture publishes into while no agent feeds this kind, for tests and platform layers.
+    /// Change what the light does for each reason the computer is away, e.g. from a settings page.
+    pub fn set_away_looks(&self, looks: HashMap<String, AwayLook>) {
+        *locked(&self.inner.away_looks) = looks;
+    }
+
     pub fn remote_audio(&self) -> Arc<AudioSource> {
         self.inner.remote_audio.clone()
     }
 }
 
-const COMMANDS: [&str; 14] = [
+const COMMANDS: [&str; 17] = [
     "status",
     "on",
     "off",
@@ -410,7 +525,16 @@ const COMMANDS: [&str; 14] = [
     "timers",
     "timer",
     "raw",
+    "monitor",
+    "away",
+    "back",
 ];
+
+/// One monitor an agent lists, kept only when it says its index and size.
+fn monitor_area(area: &Value) -> Option<Value> {
+    let number = |key: &str| area.get(key).and_then(Value::as_i64);
+    Some(json!({"index": number("index")?, "width": number("width")?, "height": number("height")?}))
+}
 
 fn field<'a>(request: &'a Value, key: &str) -> Result<&'a Value> {
     request.get(key).ok_or_else(|| invalid(format!("missing field '{key}'")))
@@ -480,15 +604,25 @@ impl Inner {
             "link": link,
             "problem": if connected { None } else { locked(&self.problem).clone() },
             "playing": self.playing(),
+            "away": locked(&self.away).clone(),
             "audio": source(audio_agents),
             "screen": source(screen_agents),
             "agents": {"audio": audio_agents, "screen": screen_agents},
+            "agentInfo": self.agent_info(),
             "watchers": self.watchers.load(Ordering::SeqCst),
         });
         if let (Value::Object(state), Value::Object(plan)) = (&mut state, locked(&self.plan).to_json()) {
             state.extend(plan);
         }
         state
+    }
+
+    fn agent_info(&self) -> Value {
+        let agents = locked(&self.agents);
+        let of = |kind: Needs| -> Vec<Value> {
+            agents.list.iter().filter(|agent| agent.kind == kind).map(Agent::info).collect()
+        };
+        json!({"audio": of(Needs::Audio), "screen": of(Needs::Screen)})
     }
 
     fn notify(&self) {
@@ -504,7 +638,7 @@ impl Inner {
     }
 
     fn playing(&self) -> bool {
-        locked(&self.effect_task).as_ref().is_some_and(|task| !task.is_finished())
+        self.effect_running.load(Ordering::SeqCst)
     }
 
     fn adopt(&self) {
@@ -622,7 +756,11 @@ impl Inner {
             return Ok(());
         }
         let plan = locked(&self.plan).clone();
+        let away = locked(&self.away).clone();
         let shown = async {
+            if let Some(reason) = away {
+                return self.show_away(&reason, &plan).await;
+            }
             if self.bulb.brightness() != plan.brightness {
                 self.bulb.set_brightness(plan.brightness).await?;
             }
@@ -649,6 +787,16 @@ impl Inner {
         }
     }
 
+    /// The look of an away computer, written to the bulb only: the plan stays as it is.
+    async fn show_away(&self, reason: &str, plan: &Plan) -> Result<()> {
+        let look = locked(&self.away_looks).get(reason).copied();
+        if look == Some(AwayLook::Off) || !plan.on {
+            self.bulb.turn_off(false).await
+        } else {
+            self.bulb.set_brightness(plan.brightness.min(AWAY_DIM)).await
+        }
+    }
+
     async fn link_lost(&self, error: &Error) {
         log::info!("lost the bulb: {error}");
         self.bulb.disconnect().await;
@@ -656,6 +804,7 @@ impl Inner {
     }
 
     async fn commit(self: &Arc<Self>, fade: bool, duration: Option<f64>) -> Result<()> {
+        *locked(&self.away) = None; // somebody is using the light
         self.adopt_on_connect.store(false, Ordering::SeqCst); // a request made while the bulb is away wins
         self.save();
         self.apply(fade, duration).await
@@ -674,22 +823,14 @@ impl Inner {
         }
         let effect = catalog::create(name, params, &sources)?;
         let inner = self.clone();
-        let task = tokio::spawn(async move { inner.run_effect(effect, duration).await });
-        *locked(&self.effect_task) = Some(task);
-        let watcher = Arc::downgrade(self);
-        let fps = self.options.fps.min(self.bulb.bearer().fps());
-        tokio::spawn(async move {
-            // tell the clients once the effect ends on its own
-            let interval = Duration::from_secs_f64(1.0 / fps.max(1.0));
-            while let Some(inner) = watcher.upgrade() {
-                if !inner.playing() {
-                    inner.notify();
-                    return;
-                }
-                drop(inner);
-                tokio::time::sleep(interval).await;
-            }
+        self.effect_running.store(true, Ordering::SeqCst);
+        let task = tokio::spawn(async move {
+            inner.run_effect(effect, duration).await;
+            // it ended by itself (a stopped effect never gets here): tell the clients
+            inner.effect_running.store(false, Ordering::SeqCst);
+            inner.notify();
         });
+        *locked(&self.effect_task) = Some(task);
         Ok(())
     }
 
@@ -749,9 +890,11 @@ impl Inner {
         }
     }
 
-    async fn run_effect(self: Arc<Self>, effect: Effect, duration: Option<f64>) {
-        let fps = self.options.fps;
+    async fn run_effect(self: &Arc<Self>, effect: Effect, duration: Option<f64>) {
+        // a slow bearer gets fewer frames, so requests do not queue up behind them
+        let fps = self.options.fps.min(self.bulb.bearer().fps());
         if let Err(error) = play(&self.bulb, effect, duration, fps).await {
+            self.effect_running.store(false, Ordering::SeqCst);
             if error.is_link_error() {
                 self.link_lost(&error).await; // the plan keeps the effect, so it resumes after reconnecting
             } else {
@@ -780,6 +923,7 @@ impl Inner {
             task.abort();
             let _ = task.await;
         }
+        self.effect_running.store(false, Ordering::SeqCst);
         self.release_sources().await;
     }
 
@@ -813,9 +957,54 @@ impl Inner {
         Ok(())
     }
 
+    /// Tell a screen agent which of its monitors to watch.
+    fn choose_monitor(&self, request: &Value) -> Result<Value> {
+        let target = as_text(field(request, "agent")?);
+        let index = as_number(field(request, "index")?, "index")? as i64;
+        if target == "local" {
+            return Err(invalid("this machine cannot capture its screen"));
+        }
+        let mut agents = locked(&self.agents);
+        let Some(agent) = agents.list.iter_mut().find(|agent| agent.id == target) else {
+            return Err(invalid(format!("no such agent: '{target}'")));
+        };
+        if agent.monitors.is_empty() {
+            return Err(invalid("that agent cannot change its monitor"));
+        }
+        if !agent.has_monitor(index) {
+            let last = agent.monitors.iter().filter_map(|area| area["index"].as_i64()).max().unwrap_or(1);
+            return Err(invalid(format!("no monitor {index}; this machine has 1 to {last}")));
+        }
+        agent.monitor = Some(index);
+        let _ = agent.events.send(json!({"event": "monitor", "monitor": index}));
+        let remembered = agent.name.clone().map(|name| ((agent.kind, name), index));
+        if let Some((key, index)) = remembered {
+            agents.chosen.insert(key, index);
+        }
+        Ok(json!({}))
+    }
+
     async fn run(self: &Arc<Self>, command: &str, request: &Value) -> Result<Value> {
         let fade = truthy(request.get("fade"));
         match command {
+            "monitor" => self.choose_monitor(request),
+            "away" => {
+                let reason = as_text(field(request, "reason")?);
+                if !AWAY_REASONS.contains(&reason.as_str()) {
+                    return Err(invalid(format!("reason must be one of {}", AWAY_REASONS.join(", "))));
+                }
+                if locked(&self.away_looks).contains_key(&reason) {
+                    *locked(&self.away) = Some(reason); // a later reason replaces an earlier one: locked, then asleep
+                    self.apply(false, None).await?;
+                }
+                Ok(json!({}))
+            }
+            "back" => {
+                if locked(&self.away).take().is_some() {
+                    self.apply(true, None).await?;
+                }
+                Ok(json!({}))
+            }
             "status" => {
                 let mut reply = self.state_json();
                 if self.bulb.is_connected() {
@@ -848,6 +1037,7 @@ impl Inner {
             }
             "brightness" => {
                 self.take_brightness(Some(field(request, "level")?))?;
+                *locked(&self.away) = None;
                 self.adopt_on_connect.store(false, Ordering::SeqCst);
                 self.save();
                 if self.playing() && self.bulb.is_connected() {
@@ -1018,8 +1208,11 @@ pub struct Session {
     service: Service,
     token: Option<String>,
     trusted: bool,
-    feeding: HashSet<Needs>,
+    /// What this connection supplies as an agent, and under which id.
+    feeding: HashMap<Needs, String>,
     subscription: Option<Subscription>,
+    events: mpsc::UnboundedSender<Value>,
+    told: mpsc::UnboundedReceiver<Value>,
 }
 
 /// What to do with one message of a [`Session`].
@@ -1033,7 +1226,13 @@ impl Session {
     /// `token` is what the client must present first; `None` trusts it from the start.
     pub fn new(service: Service, token: Option<String>) -> Self {
         let trusted = token.is_none();
-        Self { service, token, trusted, feeding: HashSet::new(), subscription: None }
+        let (events, told) = mpsc::unbounded_channel();
+        Self { service, token, trusted, feeding: HashMap::new(), subscription: None, events, told }
+    }
+
+    /// State updates once the client has subscribed, and what the service tells this client as an agent.
+    pub fn watch(&mut self) -> (Option<&mut watch::Receiver<Value>>, &mut mpsc::UnboundedReceiver<Value>) {
+        (self.subscription.as_mut().map(|subscription| &mut subscription.updates), &mut self.told)
     }
 
     /// State updates once the client has subscribed.
@@ -1064,13 +1263,23 @@ impl Session {
         } else if let Some(kind) = match command {
             "audio" => Some(Needs::Audio),
             "screen" => Some(Needs::Screen),
+            "hello" => match request.get("kind").and_then(Value::as_str) {
+                Some("audio") => Some(Needs::Audio),
+                Some("screen") => Some(Needs::Screen),
+                _ => None,
+            },
             _ => None,
         } {
-            if self.feeding.insert(kind) {
-                self.service.agent_joined(kind).await;
+            if !self.feeding.contains_key(&kind) {
+                let id = self.service.agent_joined(kind, self.events.clone()).await;
+                self.feeding.insert(kind, id);
             }
-            self.service.push(kind, &request);
-            return Outcome { reply: None, close: false }; // an agent's stream is not acknowledged
+            if command == "hello" {
+                self.service.agent_hello(&self.feeding[&kind], &request);
+            } else {
+                self.service.push(kind, &request);
+            }
+            return Outcome { reply: None, close: false }; // an agent's stream and greeting are not acknowledged
         } else if command == "subscribe" {
             if self.subscription.is_none() {
                 self.subscription = Some(self.service.subscribe());
@@ -1096,8 +1305,8 @@ impl Session {
     /// The client is gone: agents it stood for leave.
     pub async fn close(mut self) {
         self.subscription.take();
-        for kind in std::mem::take(&mut self.feeding) {
-            self.service.agent_left(kind).await;
+        for (kind, id) in std::mem::take(&mut self.feeding) {
+            self.service.agent_left(kind, &id).await;
         }
     }
 }

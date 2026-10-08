@@ -16,7 +16,7 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::plugin::{PluginApi, PluginHandle};
 use tauri::{AppHandle, Runtime};
 
-use crate::models::{AudioInput, AudioRoute, Found, Readiness};
+use crate::models::{AudioInput, AudioRoute, Found, Presence, Readiness};
 use crate::Result;
 
 const PLUGIN_PACKAGE: &str = "io.github.mertemr.chsmartbulb.bluetooth";
@@ -35,6 +35,9 @@ pub fn init<R: Runtime, C: DeserializeOwned>(_app: &AppHandle<R>, api: PluginApi
 pub struct Bluetooth<R: Runtime> {
     handle: PluginHandle<R>,
 }
+
+/// Nothing to watch on a phone.
+pub struct PresenceWatcher;
 
 /// A message the Kotlin side sends through a channel.
 #[derive(Deserialize)]
@@ -89,6 +92,11 @@ impl<R: Runtime> Bluetooth<R> {
     pub fn open_settings(&self, which: &str) -> Result<()> {
         let _: Value = self.handle.run_mobile_plugin("openSettings", json!({ "which": which }))?;
         Ok(())
+    }
+
+    /// A phone is never locked away from its light the way a computer is.
+    pub async fn watch_presence(&self, _on_event: Arc<dyn Fn(Presence) + Send + Sync>) -> Result<PresenceWatcher> {
+        Err(crate::Error::Unsupported("the phone does not follow being locked".into()))
     }
 
     /// Keep the app running with a notification while it drives the bulb, so effects survive the screen going off.

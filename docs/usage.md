@@ -121,6 +121,30 @@ same files and answers that protocol can host it, which is what keeps a port of 
 microcontroller possible. The server side is in `chsmartbulb.web` and uses the standard library
 only.
 
+### When the computer locks, sleeps or shuts down (Windows)
+
+The service can follow the computer it runs on. `--on-lock dim|off` sets what the light does
+while the screen is locked, `--on-sleep dim|off` while the computer sleeps or shuts down; the
+light goes back to what it showed, effect included, when the screen is unlocked or the computer
+wakes. Both default to `none`. Anything that changes the light (a page, a command) ends the away
+state, and the running effect, and with it the sound or screen capture, stops while it lasts.
+A locked screen dims to 10 %. Sleep leaves about a second to reach the bulb; if the write does not
+make it, the plan is restored after waking all the same.
+
+```bash
+chsmartbulb -t ble daemon --listen 8377 --web 0.0.0.0:8378 --on-lock dim --on-sleep off
+```
+
+To start it when you log in, a scheduled task does (put the token in `$CHSMARTBULB_TOKEN` and the
+address in `$CHSMARTBULB_ADDRESS` as user variables rather than in the command):
+
+```powershell
+schtasks /Create /TN chsmartbulb /SC ONLOGON /TR "C:\Tools\chsmartbulb.exe -t ble daemon --listen 8377 --web 0.0.0.0:8378 --on-lock dim --on-sleep off"
+```
+
+The sound needs no agent on the computer that runs the service: it listens to its own output while
+a sound effect plays.
+
 ### Audio from another machine
 
 The sound-reactive effects need to hear the music, which may be playing on a machine that has no
@@ -154,8 +178,11 @@ second and sends only that colour.
 chsmartbulb --host laptop.local --token SECRET screen-agent
 ```
 
-It needs the `screen` extra (numpy and mss), no Bluetooth. `--monitor N` picks a monitor other
-than the first; `0` takes all of them as one picture. Both agents can run side by side.
+It needs the `screen` extra (numpy and mss), no Bluetooth. `--monitor N` picks the monitor it
+starts on (the first by default; `0` takes all of them as one picture), and the page changes it
+while the agent runs: the screen mode lists the agent's monitors and the choice goes back to it.
+The same list shows for the service's own screen while no agent feeds it. Both agents can run
+side by side.
 
 ```bash
 pip install "chsmartbulb[screen] @ git+https://github.com/mertemr/chsmartbulb"
@@ -172,7 +199,15 @@ One JSON object per line in each direction. Replies carry `"ok"` and, on failure
 ```
 
 Commands: `status`, `on`, `off`, `color`, `brightness`, `effect`, `native`, `stop`, `effects`,
-`info`, `timers`, `timer`, `raw`, `subscribe`, `reconnect`.
+`info`, `timers`, `timer`, `raw`, `subscribe`, `reconnect`, `monitor`.
+
+Agents stream `audio` or `screen` blocks, which are not answered. An agent may greet first with
+`{"cmd": "hello", "kind": "screen", "name": "desk", "monitors": [{"index": 1, "width": 1920,
+"height": 1080}], "monitor": 1}` (an audio agent sends `kind` and `name` only); the state then
+lists it under `agentInfo`. `{"cmd": "monitor", "agent": "<id>", "index": 2}` asks a screen agent
+for another monitor (`0` is all of them; `"local"` addresses the service's own capture, where it
+has one), and the service tells that agent `{"event": "monitor", "monitor": 2}` on its own
+connection, again whenever an agent of the same name comes back.
 
 A request may carry an `"id"` of its own choosing, which the reply repeats. After
 `{"cmd": "subscribe"}`, whose reply holds the current state, the service sends
@@ -302,6 +337,10 @@ come out a dull white.
 ```bash
 chsmartbulb effect screen -s saturation=2 -s smoothing=0.4
 ```
+
+The capture checks the picture 15 times a second and slows to a third of that while the picture
+stands still, speeding up again at the first change; on one machine this took the capture of a
+2560×1440 monitor from about 11 % to about 4 % of a core.
 
 `smoothing` is how many seconds the light takes to follow a change and `saturation` multiplies the
 colourfulness (1 leaves it as on screen). The grey part of the colour goes to the white LEDs,

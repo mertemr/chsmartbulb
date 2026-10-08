@@ -1,5 +1,6 @@
 <script lang="ts">
   import DevicePanel from './components/DevicePanel.svelte'
+  import FeedBadge from './components/FeedBadge.svelte'
   import LightPanel from './components/LightPanel.svelte'
   import Icon from './components/Icon.svelte'
   import Login from './components/Login.svelte'
@@ -32,6 +33,8 @@
     if (state.native) return `Built-in: ${state.native.name}`
     return `On · ${Math.round(state.brightness * 100)}%`
   })
+  const AWAY = { lock: 'the computer is locked', sleep: 'the computer is asleep', shutdown: 'the computer is off' }
+  const away = $derived(app.state?.away ? AWAY[app.state.away] : null)
   const link = $derived(app.link === 'online' ? (app.state?.link ?? 'waiting') : 'offline')
   const summary = $derived(
     {
@@ -40,7 +43,7 @@
       waiting: 'Bulb out of reach',
     }[
       link as string
-    ] ?? showing,
+    ] ?? (away ? `Resting while ${away}` : showing),
   )
   const lit = $derived(on && link === 'connected')
 
@@ -77,6 +80,7 @@
           ></span>
           <span class="truncate">{summary}</span>
         </p>
+        <FeedBadge />
       </div>
       <button
         type="button"
@@ -123,6 +127,22 @@
           onclick={() => app.send({ cmd: 'reconnect' })}
         >
           Try now
+        </button>
+      </section>
+    {/if}
+
+    {#if away && link === 'connected'}
+      <section class="border-line bg-raised mt-2 flex flex-wrap items-center justify-between gap-3 rounded-2xl border p-4 text-sm">
+        <p class="text-muted">
+          The light rests while {away}; it shows <span class="text-ink font-medium">{showing}</span> again when the
+          computer is back, or as soon as anything is changed here.
+        </p>
+        <button
+          type="button"
+          class="border-line bg-card h-11 rounded-xl border px-4 font-medium"
+          onclick={() => app.send({ cmd: 'back' })}
+        >
+          Show it now
         </button>
       </section>
     {/if}

@@ -5,17 +5,18 @@
 //! socket protocol's requests and `bulb-state` events carry its state events. It can
 //! also connect to a Python service on the network, which needs nothing from here.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use chsmartbulb_core::service::Options;
+use chsmartbulb_core::service::{AwayLook, Options};
 use chsmartbulb_core::sim::SimulatedBulb;
 use chsmartbulb_core::{Bearer, Bulb, Connector, Service};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tauri_plugin_chsmartbulb::{AudioInput, AudioRoute, BluetoothExt, Found, Readiness};
+use tauri_plugin_chsmartbulb::{AudioInput, AudioRoute, BluetoothExt, Found, Presence, PresenceWatcher, Readiness};
 use tokio::sync::Mutex;
 
 mod share;
@@ -40,6 +41,36 @@ struct Settings {
     audio_input: AudioInput,
     #[serde(default)]
     sharing: share::Sharing,
+    #[serde(default)]
+    away: Away,
+}
+
+/// What the light does while this computer is away; nothing unless asked, as with the daemon's
+/// `--on-lock` and `--on-sleep`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Away {
+    lock: Option<AwayLook>,
+    /// Also used for shutting down.
+    sleep: Option<AwayLook>,
+}
+
+impl Away {
+    fn looks(self) -> HashMap<String, AwayLook> {
+        let mut looks = HashMap::new();
+        if let Some(look) = self.lock {
+            looks.insert("lock".to_string(), look);
+        }
+        if let Some(look) = self.sleep {
+            looks.insert("sleep".to_string(), look);
+            looks.insert("shutdown".to_string(), look);
+        }
+        looks
+    }
+
+    fn wanted(self) -> bool {
+        self.lock.is_some() || self.sleep.is_some()
+    }
 }
 
 struct Running {
@@ -47,6 +78,7 @@ struct Running {
     forward: JoinHandle<()>,
     shared: Option<share::Shared>,
     share_problem: Option<String>,
+    presence: Option<PresenceWatcher>,
 }
 
 struct App {
@@ -60,6 +92,7 @@ struct App {
 struct Setup {
     device: Option<Device>,
     audio_input: AudioInput,
+    away: Away,
     platform: &'static str,
 }
 
@@ -90,12 +123,29 @@ fn save_settings(app: &AppHandle, settings: &Settings) {
 }
 
 /// Build the service for `device` and keep the interface told of its state.
-async fn start(
-    app: &AppHandle,
-    device: &Device,
-    input: AudioInput,
-    sharing: &share::Sharing,
-) -> Result<Running, String> {
+/// Follow the computer being locked or asleep, when the settings ask for it.
+async fn watch_presence(app: &AppHandle, service: &Service, away: Away) -> Option<PresenceWatcher> {
+    if !away.wanted() {
+        return None;
+    }
+    let service = service.clone();
+    let on_event = Arc::new(move |event: Presence| {
+        let service = service.clone();
+        tauri::async_runtime::spawn(async move {
+            service.handle(&event.request()).await;
+        });
+    });
+    match app.bluetooth().watch_presence(on_event).await {
+        Ok(watcher) => Some(watcher),
+        Err(error) => {
+            log::warn!("cannot follow this computer being locked or asleep: {error}");
+            None
+        }
+    }
+}
+
+async fn start(app: &AppHandle, device: &Device, settings: &Settings) -> Result<Running, String> {
+    let (input, sharing) = (settings.audio_input, &settings.sharing);
     let bluetooth = app.bluetooth();
     let connector: Arc<dyn Connector> = if device.address == SIMULATED {
         let simulated = SimulatedBulb::new();
@@ -105,7 +155,7 @@ async fn start(
         bluetooth.connector(&device.address, device.bearer).map_err(failed)?
     };
     let state_path = app.path().app_data_dir().ok().map(|dir| dir.join("state.json"));
-    let options = Options { state_path, ..Options::default() };
+    let options = Options { state_path, away_looks: settings.away.looks(), ..Options::default() };
     let mut builder = Service::builder(Bulb::new(connector)).options(options);
     if let Some(capture) = bluetooth.audio_capture(input) {
         builder = builder.audio_capture(capture);
@@ -134,7 +184,8 @@ async fn start(
         },
         _ => (None, None),
     };
-    Ok(Running { service, forward, shared, share_problem })
+    let presence = watch_presence(app, &service, settings.away).await;
+    Ok(Running { service, forward, shared, share_problem, presence })
 }
 
 async fn stop(app: &AppHandle, state: &App) {
@@ -150,7 +201,7 @@ async fn restart(app: &AppHandle, state: &App) -> Reply<()> {
     stop(app, state).await;
     let settings = state.settings.lock().await.clone();
     if let Some(device) = &settings.device {
-        let running = start(app, device, settings.audio_input, &settings.sharing).await?;
+        let running = start(app, device, &settings).await?;
         *state.running.lock().await = Some(running);
     }
     Ok(())
@@ -168,7 +219,7 @@ async fn setup(state: State<'_, App>) -> Reply<Setup> {
     } else {
         "linux"
     };
-    Ok(Setup { device: settings.device, audio_input: settings.audio_input, platform })
+    Ok(Setup { device: settings.device, audio_input: settings.audio_input, away: settings.away, platform })
 }
 
 #[tauri::command]
@@ -285,6 +336,22 @@ async fn set_sharing(
     Ok(share_status_of(&state).await)
 }
 
+/// What the light does while this computer is locked, asleep or shut down.
+#[tauri::command]
+async fn set_away(app: AppHandle, state: State<'_, App>, away: Away) -> Reply<()> {
+    {
+        let mut settings = state.settings.lock().await;
+        settings.away = away;
+        save_settings(&app, &settings);
+    }
+    if let Some(running) = state.running.lock().await.as_mut() {
+        running.service.set_away_looks(away.looks());
+        running.presence = None;
+        running.presence = watch_presence(&app, &running.service, away).await;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn audio_route(app: AppHandle) -> Reply<AudioRoute> {
     app.bluetooth().audio_route().await.map_err(failed)
@@ -332,6 +399,7 @@ pub fn run() {
             open_settings,
             share_status,
             set_sharing,
+            set_away,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the app");

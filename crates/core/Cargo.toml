@@ -9,11 +9,12 @@ repository.workspace = true
 
 [features]
 # the service on the network: the line protocol and the web interface
-server = ["dep:base64", "dep:sha1_smol", "tokio/net", "tokio/io-util"]
+server = ["dep:base64", "dep:flate2", "dep:sha1_smol", "tokio/net", "tokio/io-util"]
 
 [dependencies]
 async-trait.workspace = true
 base64 = { version = "0.22", optional = true }
+flate2 = { version = "1", optional = true }
 sha1_smol = { version = "1", optional = true }
 log.workspace = true
 rustfft = "6"

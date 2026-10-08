@@ -18,6 +18,7 @@ async fn started() -> (Service, SocketAddr, SocketAddr) {
     let (lines_at, web_at) = (lines.local_addr().unwrap(), web.local_addr().unwrap());
     let mut assets = Assets::default();
     assets.insert("index.html", b"<!doctype html><title>Bulb</title>".to_vec());
+    assets.insert("assets/app.js", "console.log('bulb');\n".repeat(200).into_bytes());
     tokio::spawn(server::serve_lines(service.clone(), lines, Some("secret".into())));
     tokio::spawn(server::serve_web(service.clone(), web, Arc::new(assets), Some("secret".into())));
     (service, lines_at, web_at)
@@ -84,6 +85,15 @@ async fn the_web_port_serves_the_page_and_the_socket_protocol() {
     page.read_to_string(&mut answer).await.unwrap();
     assert!(answer.starts_with("HTTP/1.1 200 OK"), "{answer}");
     assert!(answer.ends_with("<title>Bulb</title>"));
+
+    let mut script = TcpStream::connect(web).await.unwrap();
+    script.write_all(b"GET /assets/app.js HTTP/1.1\r\nHost: x\r\nAccept-Encoding: br, gzip\r\n\r\n").await.unwrap();
+    let mut answer = Vec::new();
+    script.read_to_end(&mut answer).await.unwrap();
+    let text = String::from_utf8_lossy(&answer);
+    assert!(text.contains("Content-Encoding: gzip"), "{text}");
+    assert!(text.contains("immutable"));
+    assert!(answer.len() < 1000, "compressed: {} bytes", answer.len());
 
     let mut wrong = BufReader::new(TcpStream::connect(web).await.unwrap());
     wrong.get_mut().write_all(b"{\"cmd\": \"status\"}\n").await.unwrap();

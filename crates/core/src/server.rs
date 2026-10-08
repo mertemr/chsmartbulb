@@ -58,6 +58,8 @@ const SECURITY: [(&str, &str); 3] = [
 pub struct Asset {
     pub content_type: &'static str,
     pub body: Vec<u8>,
+    /// Kept only where it is smaller.
+    gzipped: Option<Vec<u8>>,
     etag: String,
     /// The name carries a hash of the content.
     immutable: bool,
@@ -87,12 +89,20 @@ impl Assets {
         };
         let etag = format!("\"{}\"", &sha1_smol::Sha1::from(&body).digest().to_string()[..16]);
         let immutable = name.starts_with("assets/");
-        self.files.insert(name.to_string(), Asset { content_type, body, etag, immutable });
+        let gzipped = gzip(&body).filter(|packed| packed.len() < body.len());
+        self.files.insert(name.to_string(), Asset { content_type, body, gzipped, etag, immutable });
     }
 
     pub fn is_empty(&self) -> bool {
         !self.files.contains_key("index.html")
     }
+}
+
+fn gzip(body: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Write as _;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+    encoder.write_all(body).ok()?;
+    encoder.finish().ok()
 }
 
 /// The proof a WebSocket server gives that it read the client's handshake key.
@@ -124,15 +134,20 @@ async fn lines(stream: TcpStream, mut session: Session) {
     loop {
         line.clear();
         let next = async {
-            match session.updates() {
+            let (updates, told) = session.watch();
+            match updates {
                 Some(updates) => tokio::select! {
                     read = reader.read_line(&mut line) => LineIncoming::Read(read),
                     changed = updates.changed() => match changed {
                         Ok(()) => LineIncoming::State(updates.borrow_and_update().clone()),
                         Err(_) => LineIncoming::Read(Ok(0)),
                     },
+                    Some(event) = told.recv() => LineIncoming::Told(event),
                 },
-                None => LineIncoming::Read(reader.read_line(&mut line).await),
+                None => tokio::select! {
+                    read = reader.read_line(&mut line) => LineIncoming::Read(read),
+                    Some(event) = told.recv() => LineIncoming::Told(event),
+                },
             }
         };
         match next.await {
@@ -153,6 +168,11 @@ async fn lines(stream: TcpStream, mut session: Session) {
                     break;
                 }
             }
+            LineIncoming::Told(event) => {
+                if send_line(&mut writer, &event).await.is_err() {
+                    break;
+                }
+            }
         }
     }
     session.close().await;
@@ -161,6 +181,7 @@ async fn lines(stream: TcpStream, mut session: Session) {
 enum LineIncoming {
     Read(std::io::Result<usize>),
     State(Value),
+    Told(Value),
 }
 
 fn event_message(state: Value) -> Value {
@@ -279,13 +300,23 @@ async fn web(stream: TcpStream, service: Service, assets: Arc<Assets>, token: Op
         return respond(reader.get_mut(), 404, &[], b"").await;
     };
     let caching = if asset.immutable { "public, max-age=31536000, immutable" } else { "no-cache" };
-    let mut fields = vec![("ETag", asset.etag.as_str()), ("Cache-Control", caching)];
+    let mut fields = vec![("ETag", asset.etag.as_str()), ("Cache-Control", caching), ("Vary", "Accept-Encoding")];
     fields.extend(SECURITY);
     if request.headers.get("if-none-match") == Some(&asset.etag) {
         return respond(reader.get_mut(), 304, &fields, b"").await;
     }
     fields.push(("Content-Type", asset.content_type));
-    let body: &[u8] = if request.method == "GET" { &asset.body } else { b"" };
+    let accepts_gzip = request.headers.get("accept-encoding").is_some_and(|codings| {
+        codings.split(',').any(|coding| coding.split(';').next().unwrap_or_default().trim() == "gzip")
+    });
+    let mut body: &[u8] = &asset.body;
+    if let (true, Some(packed)) = (accepts_gzip, &asset.gzipped) {
+        body = packed;
+        fields.push(("Content-Encoding", "gzip"));
+    }
+    if request.method != "GET" {
+        body = b"";
+    }
     respond(reader.get_mut(), 200, &fields, body).await
 }
 
@@ -319,17 +350,20 @@ async fn websocket(
     ping.tick().await;
     let code = loop {
         let next = async {
-            match session.updates() {
+            let (updates, told) = session.watch();
+            match updates {
                 Some(updates) => tokio::select! {
                     message = receive(&mut frames) => Incoming::Message(message),
                     changed = updates.changed() => match changed {
                         Ok(()) => Incoming::State(updates.borrow_and_update().clone()),
                         Err(_) => Incoming::Message(Ok(None)),
                     },
+                    Some(event) = told.recv() => Incoming::Told(event),
                     _ = ping.tick() => Incoming::Ping,
                 },
                 None => tokio::select! {
                     message = receive(&mut frames) => Incoming::Message(message),
+                    Some(event) = told.recv() => Incoming::Told(event),
                     _ = ping.tick() => Incoming::Ping,
                 },
             }
@@ -342,6 +376,11 @@ async fn websocket(
             }
             Incoming::State(state) => {
                 if send_text(&mut write_half, &event_message(state)).await.is_err() {
+                    break None;
+                }
+            }
+            Incoming::Told(event) => {
+                if send_text(&mut write_half, &event).await.is_err() {
                     break None;
                 }
             }
@@ -382,6 +421,7 @@ async fn websocket(
 enum Incoming {
     Message(Result<Option<Received>, Closing>),
     State(Value),
+    Told(Value),
     Ping,
 }
 

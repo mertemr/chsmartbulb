@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import errno
 import socket
+import sys
 
 from ..errors import ConnectionFailed, TransportError
 from .base import Transport
@@ -44,10 +45,17 @@ class RfcommTransport(Transport):
         target = f"{self.address} channel {self.channel}"
         for attempt in range(self._busy_retries + 1):
             sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
-            sock.setblocking(False)
             try:
-                await asyncio.wait_for(loop.sock_connect(sock, (self.address, self.channel)), self._connect_timeout)
-            except asyncio.TimeoutError:
+                if sys.platform == "win32":  # the proactor loop cannot bind a Bluetooth socket
+                    sock.settimeout(self._connect_timeout)
+                    await loop.run_in_executor(None, sock.connect, (self.address, self.channel))
+                    sock.setblocking(False)
+                else:
+                    sock.setblocking(False)
+                    await asyncio.wait_for(
+                        loop.sock_connect(sock, (self.address, self.channel)), self._connect_timeout
+                    )
+            except (asyncio.TimeoutError, TimeoutError):
                 sock.close()
                 raise ConnectionFailed(f"timed out connecting to {target}") from None
             except OSError as exc:

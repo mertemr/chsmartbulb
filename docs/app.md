@@ -65,6 +65,16 @@ and the Python package's command line and its `audio-agent` and `screen-agent` c
 sound this way. Nothing is encrypted, so keep it to a network you trust; *New token* turns away
 every machine that knew the old one.
 
+## While the computer is away
+
+In the desktop app, *While you are away* under Device chooses what the light does when the
+computer locks (dim or off) and when it sleeps or shuts down, as the daemon's `--on-lock` and
+`--on-sleep` do; nothing changes unless asked. The light comes back as it was when the computer
+does, or as soon as anything is changed. Linux follows logind on the system bus (the session's
+lock hint, sleep and shutdown); Windows follows the session and power messages every window gets.
+The `away` and `back` requests are part of the socket protocol, so a page or another machine can
+send them too, and the interface says when the light is resting and offers to show it again.
+
 ## Without a bulb
 
 *Try the app with a simulated one*, at the bottom of the first screen, drives an in-memory bulb

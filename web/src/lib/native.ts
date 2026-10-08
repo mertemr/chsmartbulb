@@ -18,7 +18,10 @@ export type Found = {
   likely: boolean
 }
 export type AudioInput = 'playback' | 'microphone'
-export type Setup = { device: Device | null; audioInput: AudioInput; platform: string }
+export type AwayLook = 'dim' | 'off' | null
+/** What the light does while this computer is locked, or asleep and shut down. */
+export type Away = { lock: AwayLook; sleep: AwayLook }
+export type Setup = { device: Device | null; audioInput: AudioInput; away: Away; platform: string }
 export type AudioRoute = { outputs: string[]; speakers: string[]; canCapturePlayback: boolean }
 export type ShareStatus = {
   enabled: boolean
@@ -42,6 +45,7 @@ export const native = {
   openSettings: (which: 'bluetooth' | 'sound') => invoke<void>('open_settings', { which }),
   shareStatus: () => invoke<ShareStatus>('share_status'),
   setSharing: (enabled: boolean, renew = false) => invoke<ShareStatus>('set_sharing', { enabled, renew }),
+  setAway: (away: Away) => invoke<void>('set_away', { away }),
 }
 
 export class NativeLink implements Link {

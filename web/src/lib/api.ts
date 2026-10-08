@@ -7,11 +7,20 @@ export type Step = { color: string; hold: number; fade: number; ease: string }
 
 export type Value = number | string | string[] | Step[] | null
 
+/** Another machine feeding its sound or screen. `name` and `monitors` are empty for an agent that never said who it is. */
+export type AgentInfo = {
+  id: string
+  name: string | null
+  monitors: { index: number; width: number; height: number }[]
+  monitor: number | null
+}
+
 export type State = {
   connected: boolean
   link: 'connected' | 'connecting' | 'waiting'
   problem: string | null // why the service could not reach the bulb, while it cannot
   playing: boolean
+  away?: 'lock' | 'sleep' | 'shutdown' | null // the computer is away: the bulb shows the away look, the plan waits
   on: boolean
   color: string
   brightness: number
@@ -20,6 +29,9 @@ export type State = {
   audio: 'agent' | 'local'
   screen: 'agent' | 'local'
   agents: { audio: number; screen: number } // other machines feeding their sound or screen
+  agentInfo?: { audio: AgentInfo[]; screen: AgentInfo[] } // who they are, from a service that knows
+  localMonitors?: { index: number; width: number; height: number }[] // the service's own screens, when it can capture
+  localMonitor?: number
   watchers: number // clients following the state, this page included
 }
 

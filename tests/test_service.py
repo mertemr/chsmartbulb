@@ -51,6 +51,68 @@ def test_colour_brightness_and_power_requests_drive_the_bulb():
     run(scenario())
 
 
+def test_away_dims_or_turns_off_and_back_restores_the_plan():
+    async def scenario():
+        transport = FakeBulbTransport()
+        daemon = await attached(transport, away_looks={"lock": "dim", "sleep": "off"})
+        await daemon.handle({"cmd": "color", "color": "#ff0064", "brightness": 0.5})
+
+        assert (await daemon.handle({"cmd": "away", "reason": "lock"}))["ok"]
+        assert 0 < transport.last_light["r"] < 40  # dimmed, not off
+        assert (await daemon.handle({"cmd": "status"}))["away"] == "lock"
+
+        await daemon.handle({"cmd": "away", "reason": "sleep"})  # a later reason replaces the earlier one
+        assert transport.channels == [0, 0, 0, 0, 0]
+
+        assert (await daemon.handle({"cmd": "back"}))["ok"]
+        assert (transport.last_light["r"], transport.last_light["b"]) == (128, 50)  # the plan, as it was
+        status = await daemon.handle({"cmd": "status"})
+        assert (status["away"], status["color"], status["on"]) == (None, "#ff0064", True)
+        await daemon.close()
+
+    run(scenario())
+
+
+def test_away_stops_the_running_effect_and_back_resumes_it():
+    async def scenario():
+        daemon = await attached(FakeBulbTransport(), away_looks={"lock": "dim"}, fps=200)
+        await daemon.handle({"cmd": "effect", "name": "hue"})
+        assert daemon._playing
+        await daemon.handle({"cmd": "away", "reason": "lock"})
+        assert not daemon._playing
+        await daemon._apply()  # a reconnect or an agent coming in must not end the away look
+        assert not daemon._playing
+        await daemon.handle({"cmd": "back"})
+        assert daemon._playing
+        await daemon.close()
+
+    run(scenario())
+
+
+def test_a_request_ends_away_and_odd_away_requests_do_nothing_harmful():
+    async def scenario():
+        transport = FakeBulbTransport()
+        daemon = await attached(transport, away_looks={"lock": "dim"})
+        await daemon.handle({"cmd": "color", "color": "#00ff00"})
+        await daemon.handle({"cmd": "away", "reason": "lock"})
+        await daemon.handle({"cmd": "color", "color": "#0000ff"})  # somebody uses the light
+        assert (await daemon.handle({"cmd": "status"}))["away"] is None
+        assert transport.last_light["b"] == 255
+
+        written = len(transport.light_bodies)
+        assert (await daemon.handle({"cmd": "back"}))["ok"]  # nothing to come back from
+        assert len(transport.light_bodies) == written
+
+        assert (await daemon.handle({"cmd": "away", "reason": "shutdown"}))["ok"]  # no look for it: ignored
+        assert (await daemon.handle({"cmd": "status"}))["away"] is None
+        bad = await daemon.handle({"cmd": "away", "reason": "boredom"})
+        assert not bad["ok"]
+        assert "reason" in bad["error"]
+        await daemon.close()
+
+    run(scenario())
+
+
 def test_bad_requests_are_reported_not_raised():
     async def scenario():
         daemon = await attached(FakeBulbTransport())
@@ -326,7 +388,8 @@ def test_state_says_why_the_bulb_is_away_and_a_request_can_retry_at_once():
     async def scenario():
         transport = FakeBulbTransport()
         transport.fail_open = True
-        daemon = service.BulbService(ChSmartBulb(transport, auto_reconnect=False), retry_delay=30.0)
+        bulb = ChSmartBulb(transport, auto_reconnect=False)
+        daemon = service.BulbService(bulb, retry_delay=30.0, monitor_lister=list)
         heard = []
         daemon.subscribe(heard.append)
         await daemon.start()

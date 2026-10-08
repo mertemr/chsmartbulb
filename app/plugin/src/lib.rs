@@ -20,9 +20,9 @@ pub use error::{Error, Result};
 pub use models::*;
 
 #[cfg(desktop)]
-pub use desktop::Bluetooth;
+pub use desktop::{Bluetooth, PresenceWatcher};
 #[cfg(mobile)]
-pub use mobile::Bluetooth;
+pub use mobile::{Bluetooth, PresenceWatcher};
 
 /// Access to the plugin from anything that can reach the app's state.
 pub trait BluetoothExt<R: Runtime> {
