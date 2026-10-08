@@ -1,15 +1,16 @@
 //! The background service against a fake bulb; mirrors `tests/test_service.py`.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use chsmartbulb_core::audio::AudioSource;
 use chsmartbulb_core::catalog::Needs;
-use chsmartbulb_core::service::{AudioCapture, AwayLook, Options, Service, Session};
+use chsmartbulb_core::screen::ScreenSource;
+use chsmartbulb_core::service::{AudioCapture, AwayLook, Options, ScreenCapture, Service, Session};
 use chsmartbulb_core::sim::SimulatedBulb as FakeBulb;
-use chsmartbulb_core::{Bulb, Result};
+use chsmartbulb_core::{Bulb, Color, Result};
 use serde_json::{json, Value};
 
 fn options() -> Options {
@@ -115,12 +116,14 @@ async fn finite_effect_returns_to_the_plain_colour_when_done() {
 #[derive(Default)]
 struct FakeCapture {
     running: AtomicBool,
+    starts: AtomicUsize,
 }
 
 #[async_trait]
 impl AudioCapture for FakeCapture {
     async fn start(&self, _source: Arc<AudioSource>) -> Result<()> {
         self.running.store(true, Ordering::SeqCst);
+        self.starts.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
@@ -141,6 +144,11 @@ async fn sound_effect_starts_and_stops_the_audio_capture() {
     assert!(!capture.running.load(Ordering::SeqCst));
     ask(&service, json!({"cmd": "effect", "name": "music"})).await;
     assert!(capture.running.load(Ordering::SeqCst));
+    // retuning the effect, or moving to another that listens, keeps the capture open
+    ask(&service, json!({"cmd": "effect", "name": "music", "params": {"delay": 0.2}})).await;
+    ask(&service, json!({"cmd": "effect", "name": "spectrum"})).await;
+    assert!(capture.running.load(Ordering::SeqCst));
+    assert_eq!(capture.starts.load(Ordering::SeqCst), 1);
     ask(&service, json!({"cmd": "color", "color": "red"})).await;
     assert!(!capture.running.load(Ordering::SeqCst));
     // an agent takes over from the local capture
@@ -153,6 +161,107 @@ async fn sound_effect_starts_and_stops_the_audio_capture() {
     assert!(capture.running.load(Ordering::SeqCst));
     service.close().await;
     assert!(!capture.running.load(Ordering::SeqCst));
+}
+
+/// Records the monitors it was started on.
+#[derive(Default)]
+struct FakeScreen {
+    watched: std::sync::Mutex<Vec<i64>>,
+    running: AtomicBool,
+    /// Stands for a desktop that has the user choose the screen.
+    asks: bool,
+}
+
+#[async_trait]
+impl ScreenCapture for FakeScreen {
+    fn monitors(&self) -> Vec<Value> {
+        if self.asks {
+            return Vec::new();
+        }
+        vec![json!({"index": 1, "width": 1920, "height": 1080}), json!({"index": 2, "width": 1280, "height": 720})]
+    }
+
+    fn asks(&self) -> bool {
+        self.asks
+    }
+
+    async fn choose_again(&self) {
+        self.running.store(false, Ordering::SeqCst);
+    }
+
+    fn alive(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
+    }
+
+    async fn start(&self, source: Arc<ScreenSource>, monitor: i64) -> Result<()> {
+        self.watched.lock().unwrap().push(monitor);
+        self.running.store(true, Ordering::SeqCst);
+        source.push(Color::rgb(10, 0, 0));
+        Ok(())
+    }
+
+    async fn stop(&self) {
+        self.running.store(false, Ordering::SeqCst);
+    }
+}
+
+#[tokio::test]
+async fn the_services_own_screen_follows_the_chosen_monitor() {
+    let fake = FakeBulb::new();
+    let screen = Arc::new(FakeScreen::default());
+    let service =
+        Service::builder(Bulb::new(fake.connector())).options(options()).screen_capture(screen.clone()).build();
+    service.attach().await.unwrap();
+    let status = ask(&service, json!({"cmd": "status"})).await;
+    assert_eq!(status["localMonitors"], json!(screen.monitors()));
+    assert_eq!(status["localMonitor"], 1);
+    ask(&service, json!({"cmd": "effect", "name": "screen", "params": {"smoothing": 0}})).await;
+    // retuning keeps the capture; another monitor restarts it there
+    ask(&service, json!({"cmd": "effect", "name": "screen", "params": {"smoothing": 0.1}})).await;
+    assert_eq!(*screen.watched.lock().unwrap(), [1]);
+    let chosen = ask(&service, json!({"cmd": "monitor", "agent": "local", "index": 2})).await;
+    assert_eq!(chosen["ok"], true);
+    assert_eq!(*screen.watched.lock().unwrap(), [1, 2]);
+    assert!(screen.running.load(Ordering::SeqCst));
+    assert_eq!(ask(&service, json!({"cmd": "status"})).await["localMonitor"], 2);
+    let bad = ask(&service, json!({"cmd": "monitor", "agent": "local", "index": 9})).await;
+    assert_eq!(bad["ok"], false);
+    ask(&service, json!({"cmd": "color", "color": "red"})).await;
+    assert!(!screen.running.load(Ordering::SeqCst));
+    service.close().await;
+}
+
+#[tokio::test]
+async fn a_desktop_that_asks_for_the_screen_is_asked_again_on_request() {
+    let fake = FakeBulb::new();
+    let screen = Arc::new(FakeScreen { asks: true, ..FakeScreen::default() });
+    let service =
+        Service::builder(Bulb::new(fake.connector())).options(options()).screen_capture(screen.clone()).build();
+    service.attach().await.unwrap();
+    let status = ask(&service, json!({"cmd": "status"})).await;
+    assert_eq!((status["localScreenAsks"].clone(), status.get("localMonitors")), (json!(true), None));
+    // nothing follows the screen yet: the choice is forgotten, nobody is asked
+    let chosen = ask(&service, json!({"cmd": "monitor", "agent": "local", "index": 0})).await;
+    assert_eq!(chosen["ok"], true);
+    assert!(screen.watched.lock().unwrap().is_empty());
+    ask(&service, json!({"cmd": "effect", "name": "screen"})).await;
+    assert_eq!(screen.watched.lock().unwrap().len(), 1);
+    // while the effect runs, the capture starts over, which is when the desktop asks
+    ask(&service, json!({"cmd": "monitor", "agent": "local", "index": 0})).await;
+    assert_eq!(screen.watched.lock().unwrap().len(), 2);
+    assert!(screen.running.load(Ordering::SeqCst));
+    service.close().await;
+}
+
+#[tokio::test]
+async fn a_service_that_cannot_capture_its_screen_offers_no_monitors() {
+    let fake = FakeBulb::new();
+    let service = attached(&fake, options()).await;
+    let status = ask(&service, json!({"cmd": "status"})).await;
+    assert_eq!(status.get("localMonitors"), None);
+    let refused = ask(&service, json!({"cmd": "monitor", "agent": "local", "index": 1})).await;
+    assert_eq!(refused["ok"], false);
+    service.close().await;
 }
 
 #[tokio::test]
@@ -423,4 +532,13 @@ async fn a_request_ends_away_and_odd_away_requests_do_nothing_harmful() {
     assert_eq!(bad["ok"], false);
     assert!(bad["error"].as_str().unwrap().contains("reason"));
     service.close().await;
+}
+
+#[test]
+fn presence_becomes_the_requests_of_the_python_watcher() {
+    use chsmartbulb_core::service::Presence;
+    assert_eq!(Presence::Lock.request(), json!({"cmd": "away", "reason": "lock"}));
+    assert_eq!(Presence::Shutdown.request(), json!({"cmd": "away", "reason": "shutdown"}));
+    assert_eq!(Presence::Unlock.request(), json!({"cmd": "back"}));
+    assert_eq!(Presence::Resume.request(), json!({"cmd": "back"}));
 }

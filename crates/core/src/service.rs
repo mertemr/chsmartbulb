@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
 use std::time::Duration;
 
@@ -33,13 +33,32 @@ pub trait AudioCapture: Send + Sync {
     /// Begin publishing into `source`; fails when there is nothing to capture with.
     async fn start(&self, source: Arc<AudioSource>) -> Result<()>;
     async fn stop(&self);
+    /// Whether a started capture still delivers; one that ended by itself is started again.
+    fn alive(&self) -> bool {
+        true
+    }
 }
 
 /// Something on this device that can see a screen, started while an effect needs it.
 #[async_trait]
 pub trait ScreenCapture: Send + Sync {
-    async fn start(&self, source: Arc<ScreenSource>) -> Result<()>;
+    /// The monitors that can be watched, as `{"index", "width", "height"}` counted from 1;
+    /// empty where the screen cannot be captured.
+    fn monitors(&self) -> Vec<Value>;
+    /// Begin pushing the colour of `monitor` into `source`; 0 is every monitor together.
+    async fn start(&self, source: Arc<ScreenSource>, monitor: i64) -> Result<()>;
     async fn stop(&self);
+    /// Whether the system has the user choose the screen itself, as a Wayland desktop does:
+    /// there are no monitors to list then, only [`ScreenCapture::choose_again`].
+    fn asks(&self) -> bool {
+        false
+    }
+    /// Forget the chosen screen and stop watching it, so the next start asks for one.
+    async fn choose_again(&self) {}
+    /// Whether a started capture still delivers; one that ended by itself is started again.
+    fn alive(&self) -> bool {
+        true
+    }
 }
 
 /// What the light should be showing; survives reconnects and restarts.
@@ -98,6 +117,29 @@ pub enum AwayLook {
     Off,
 }
 
+/// What happens to the computer, for the light to follow it being away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Presence {
+    Lock,
+    Unlock,
+    Sleep,
+    Resume,
+    Shutdown,
+}
+
+impl Presence {
+    /// The service request that goes with it, as `chsmartbulb.presence.request_of` builds it.
+    pub fn request(self) -> Value {
+        match self {
+            Presence::Unlock | Presence::Resume => json!({"cmd": "back"}),
+            Presence::Lock => json!({"cmd": "away", "reason": "lock"}),
+            Presence::Sleep => json!({"cmd": "away", "reason": "sleep"}),
+            Presence::Shutdown => json!({"cmd": "away", "reason": "shutdown"}),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Options {
     pub state_path: Option<PathBuf>,
@@ -107,6 +149,8 @@ pub struct Options {
     pub save_delay: Duration,
     /// The look for each reason the computer is away; a reason without one is ignored.
     pub away_looks: HashMap<String, AwayLook>,
+    /// Which of this device's monitors the screen effect follows, until a request chooses another.
+    pub monitor: i64,
 }
 
 impl Default for Options {
@@ -118,6 +162,7 @@ impl Default for Options {
             poll_interval: Duration::from_secs(2),
             save_delay: Duration::from_secs(1),
             away_looks: HashMap::new(),
+            monitor: crate::screen::PRIMARY,
         }
     }
 }
@@ -127,9 +172,18 @@ impl Default for Options {
 struct Feeds {
     audio_agents: usize,
     screen_agents: usize,
-    /// The local capture currently running for an effect, to stop when it ends.
-    audio_running: bool,
-    screen_running: bool,
+    /// What the local capture running for an effect publishes into, to stop when no effect needs it.
+    audio_local: Option<Arc<AudioSource>>,
+    /// With the monitor it watches.
+    screen_local: Option<(Arc<ScreenSource>, i64)>,
+}
+
+/// The local captures of an effect being replaced, kept up for the next one: reopening
+/// a capture disturbs what the computer is playing.
+#[derive(Default)]
+struct Held {
+    audio: Option<Arc<AudioSource>>,
+    screen: Option<(Arc<ScreenSource>, i64)>,
 }
 
 /// Another machine feeding its sound or screen, as far as it said who it is.
@@ -186,6 +240,9 @@ struct Inner {
     remote_screen: Arc<ScreenSource>,
     local_audio: Option<Arc<dyn AudioCapture>>,
     local_screen: Option<Arc<dyn ScreenCapture>>,
+    /// What the local screen capture offers; empty when there is none or it cannot capture.
+    local_monitors: Vec<Value>,
+    local_monitor: AtomicI64,
     pending_save: StdMutex<Option<JoinHandle<()>>>,
     away_looks: StdMutex<HashMap<String, AwayLook>>,
     /// Why the computer is away, while it is: the light shows the away look, the plan stays as it is.
@@ -249,6 +306,8 @@ impl Builder {
     pub fn build(self) -> Service {
         let (state, _) = watch::channel(Value::Null);
         let away_looks = self.options.away_looks.clone();
+        let local_monitors = self.local_screen.as_ref().map(|capture| capture.monitors()).unwrap_or_default();
+        let local_monitor = self.options.monitor;
         let inner = Arc::new(Inner {
             bulb: self.bulb,
             options: self.options,
@@ -270,6 +329,8 @@ impl Builder {
             remote_screen: ScreenSource::new(),
             local_audio: self.local_audio,
             local_screen: self.local_screen,
+            local_monitors,
+            local_monitor: AtomicI64::new(local_monitor),
             pending_save: StdMutex::new(None),
             away_looks: StdMutex::new(away_looks),
             away: StdMutex::new(None),
@@ -611,6 +672,13 @@ impl Inner {
             "agentInfo": self.agent_info(),
             "watchers": self.watchers.load(Ordering::SeqCst),
         });
+        if self.local_screen.as_ref().is_some_and(|capture| capture.asks()) {
+            state["localScreenAsks"] = json!(true);
+        }
+        if !self.local_monitors.is_empty() {
+            state["localMonitors"] = json!(self.local_monitors);
+            state["localMonitor"] = json!(self.local_monitor.load(Ordering::SeqCst));
+        }
         if let (Value::Object(state), Value::Object(plan)) = (&mut state, locked(&self.plan).to_json()) {
             state.extend(plan);
         }
@@ -751,8 +819,9 @@ impl Inner {
 
     /// Make the bulb show the plan. Does nothing while disconnected; the supervisor retries.
     async fn apply(self: &Arc<Self>, fade: bool, duration: Option<f64>) -> Result<()> {
-        self.stop_effect().await;
+        let mut held = self.halt_effect().await;
         if !self.bulb.is_connected() {
+            self.release(held).await;
             return Ok(());
         }
         let plan = locked(&self.plan).clone();
@@ -767,7 +836,7 @@ impl Inner {
             if !plan.on {
                 self.bulb.turn_off(fade).await
             } else if let Some(effect) = &plan.effect {
-                self.start_effect(effect, duration).await
+                self.start_effect(effect, duration, &mut held).await
             } else if let Some(native) = &plan.native {
                 let name = native.get("name").and_then(Value::as_str).unwrap_or_default();
                 let effect =
@@ -778,7 +847,9 @@ impl Inner {
                 self.bulb.set_color(plan.color, fade).await
             }
         };
-        match shown.await {
+        let shown = shown.await;
+        self.release(held).await; // whatever the light no longer follows
+        match shown {
             Err(error) if error.is_link_error() => {
                 self.link_lost(&error).await;
                 Ok(())
@@ -812,13 +883,13 @@ impl Inner {
 
     // --- effects ----------------------------------------------------------------------
 
-    async fn start_effect(self: &Arc<Self>, spec: &Value, duration: Option<f64>) -> Result<()> {
+    async fn start_effect(self: &Arc<Self>, spec: &Value, duration: Option<f64>, held: &mut Held) -> Result<()> {
         let name = spec.get("name").and_then(Value::as_str).unwrap_or_default();
         let params = spec.get("params").and_then(Value::as_object);
         let mut sources = Sources::default();
         match needs_of(spec) {
-            Some(Needs::Audio) => sources.audio = Some(self.audio_source().await),
-            Some(Needs::Screen) => sources.screen = Some(self.screen_source().await),
+            Some(Needs::Audio) => sources.audio = Some(self.audio_source(held).await),
+            Some(Needs::Screen) => sources.screen = Some(self.screen_source(held).await),
             None => {}
         }
         let effect = catalog::create(name, params, &sources)?;
@@ -834,7 +905,7 @@ impl Inner {
         Ok(())
     }
 
-    async fn audio_source(&self) -> Arc<AudioSource> {
+    async fn audio_source(&self, held: &mut Held) -> Arc<AudioSource> {
         if locked(&self.feeds).audio_agents > 0 {
             return self.remote_audio.clone();
         }
@@ -842,52 +913,66 @@ impl Inner {
             log::warn!("nothing to capture sound with here: staying dark until an agent brings a feed");
             return self.remote_audio.clone();
         };
-        let source = AudioSource::new(self.clock.clone());
-        match capture.start(source.clone()).await {
-            Ok(()) => {
-                locked(&self.feeds).audio_running = true;
+        let source = match held.audio.take().filter(|_| capture.alive()) {
+            Some(source) => source,
+            None => {
+                let source = AudioSource::new(self.clock.clone());
+                if let Err(error) = capture.start(source.clone()).await {
+                    log::warn!("sound effect has no input: {error}");
+                    return self.remote_audio.clone();
+                }
                 source
             }
-            Err(error) => {
-                log::warn!("sound effect has no input: {error}");
-                self.remote_audio.clone()
-            }
-        }
+        };
+        locked(&self.feeds).audio_local = Some(source.clone());
+        source
     }
 
-    async fn screen_source(&self) -> Arc<ScreenSource> {
+    async fn screen_source(&self, held: &mut Held) -> Arc<ScreenSource> {
         if locked(&self.feeds).screen_agents > 0 {
             return self.remote_screen.clone();
         }
         let Some(capture) = &self.local_screen else { return self.remote_screen.clone() };
-        let source = ScreenSource::new();
-        match capture.start(source.clone()).await {
-            Ok(()) => {
-                locked(&self.feeds).screen_running = true;
+        let monitor = self.local_monitor.load(Ordering::SeqCst);
+        let source = match held.screen.take() {
+            Some((source, watched)) if watched == monitor && capture.alive() => source,
+            watching => {
+                if watching.is_some() {
+                    capture.stop().await; // it watches another monitor
+                }
+                let source = ScreenSource::new();
+                if let Err(error) = capture.start(source.clone(), monitor).await {
+                    log::warn!("screen effect has no input: {error}");
+                    return self.remote_screen.clone();
+                }
                 source
             }
-            Err(error) => {
-                log::warn!("screen effect has no input: {error}");
-                self.remote_screen.clone()
+        };
+        locked(&self.feeds).screen_local = Some((source.clone(), monitor));
+        source
+    }
+
+    fn hold_sources(&self) -> Held {
+        let mut feeds = locked(&self.feeds);
+        Held { audio: feeds.audio_local.take(), screen: feeds.screen_local.take() }
+    }
+
+    async fn release(&self, held: Held) {
+        if held.audio.is_some() {
+            if let Some(capture) = &self.local_audio {
+                capture.stop().await;
+            }
+        }
+        if held.screen.is_some() {
+            if let Some(capture) = &self.local_screen {
+                capture.stop().await;
             }
         }
     }
 
     async fn release_sources(&self) {
-        let (audio, screen) = {
-            let mut feeds = locked(&self.feeds);
-            (std::mem::take(&mut feeds.audio_running), std::mem::take(&mut feeds.screen_running))
-        };
-        if audio {
-            if let Some(capture) = &self.local_audio {
-                capture.stop().await;
-            }
-        }
-        if screen {
-            if let Some(capture) = &self.local_screen {
-                capture.stop().await;
-            }
-        }
+        let held = self.hold_sources();
+        self.release(held).await;
     }
 
     async fn run_effect(self: &Arc<Self>, effect: Effect, duration: Option<f64>) {
@@ -918,13 +1003,19 @@ impl Inner {
     }
 
     async fn stop_effect(&self) {
+        let held = self.halt_effect().await;
+        self.release(held).await;
+    }
+
+    /// End the effect and hand over the captures it followed, for the next effect or to release.
+    async fn halt_effect(&self) -> Held {
         let task = locked(&self.effect_task).take();
         if let Some(task) = task {
             task.abort();
             let _ = task.await;
         }
         self.effect_running.store(false, Ordering::SeqCst);
-        self.release_sources().await;
+        self.hold_sources()
     }
 
     async fn feed_changed(self: &Arc<Self>, kind: Needs) {
@@ -958,11 +1049,25 @@ impl Inner {
     }
 
     /// Tell a screen agent which of its monitors to watch.
-    fn choose_monitor(&self, request: &Value) -> Result<Value> {
+    async fn choose_monitor(self: &Arc<Self>, request: &Value) -> Result<Value> {
         let target = as_text(field(request, "agent")?);
         let index = as_number(field(request, "index")?, "index")? as i64;
         if target == "local" {
-            return Err(invalid("this machine cannot capture its screen"));
+            if let Some(capture) = self.local_screen.as_ref().filter(|capture| capture.asks()) {
+                capture.choose_again().await;
+                self.feed_changed(Needs::Screen).await; // an effect following the screen asks right away
+                return Ok(json!({}));
+            }
+            if self.local_monitors.is_empty() {
+                return Err(invalid("this machine cannot capture its screen"));
+            }
+            if index != 0 && !self.local_monitors.iter().any(|area| area["index"] == index) {
+                let last = self.local_monitors.iter().filter_map(|area| area["index"].as_i64()).max().unwrap_or(1);
+                return Err(invalid(format!("no monitor {index}; this machine has 1 to {last}")));
+            }
+            self.local_monitor.store(index, Ordering::SeqCst);
+            self.feed_changed(Needs::Screen).await; // an effect following the screen restarts on it
+            return Ok(json!({}));
         }
         let mut agents = locked(&self.agents);
         let Some(agent) = agents.list.iter_mut().find(|agent| agent.id == target) else {
@@ -987,7 +1092,7 @@ impl Inner {
     async fn run(self: &Arc<Self>, command: &str, request: &Value) -> Result<Value> {
         let fade = truthy(request.get("fade"));
         match command {
-            "monitor" => self.choose_monitor(request),
+            "monitor" => self.choose_monitor(request).await,
             "away" => {
                 let reason = as_text(field(request, "reason")?);
                 if !AWAY_REASONS.contains(&reason.as_str()) {
