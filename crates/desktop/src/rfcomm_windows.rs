@@ -19,6 +19,7 @@ use windows_sys::Win32::Networking::WinSock::{
 pub struct RfcommConnector {
     address: String,
     bt_addr: u64,
+    channel: u8,
 }
 
 impl RfcommConnector {
@@ -28,7 +29,13 @@ impl RfcommConnector {
             .then(|| u64::from_str_radix(&digits, 16).ok())
             .flatten()
             .ok_or_else(|| crate::Error::Bluetooth(format!("not a Bluetooth address: {address}")))?;
-        Ok(Self { address: address.to_ascii_uppercase(), bt_addr })
+        Ok(Self { address: address.to_ascii_uppercase(), bt_addr, channel: RFCOMM_CHANNEL })
+    }
+
+    /// Use another RFCOMM channel than the bulb's usual one.
+    pub fn channel(mut self, channel: u8) -> Self {
+        self.channel = channel;
+        self
     }
 }
 
@@ -50,7 +57,7 @@ fn last_error() -> String {
     format!("winsock error {}", unsafe { WSAGetLastError() })
 }
 
-fn open(bt_addr: u64) -> std::result::Result<Socket, String> {
+fn open(bt_addr: u64, channel: u8) -> std::result::Result<Socket, String> {
     // SAFETY: plain Winsock calls with valid, owned arguments.
     unsafe {
         let mut data: WSADATA = std::mem::zeroed();
@@ -68,7 +75,7 @@ fn open(bt_addr: u64) -> std::result::Result<Socket, String> {
         address.addressFamily = AF_BTH;
         address.btAddr = bt_addr;
         address.serviceClassId = GUID::from_u128(0);
-        address.port = u32::from(RFCOMM_CHANNEL);
+        address.port = u32::from(channel);
         let length = std::mem::size_of::<SOCKADDR_BTH>() as i32;
         if connect(socket.0, (&address as *const SOCKADDR_BTH).cast::<SOCKADDR>(), length) == SOCKET_ERROR {
             return Err(last_error());
@@ -113,8 +120,9 @@ impl Writer for SocketWriter {
 impl Connector for RfcommConnector {
     async fn connect(&self) -> Result<Arc<dyn Link>> {
         let bt_addr = self.bt_addr;
-        let target = format!("{} channel {RFCOMM_CHANNEL}", self.address);
-        let socket = tokio::task::spawn_blocking(move || open(bt_addr))
+        let channel = self.channel;
+        let target = format!("{} channel {channel}", self.address);
+        let socket = tokio::task::spawn_blocking(move || open(bt_addr, channel))
             .await
             .map_err(|e| Error::ConnectionFailed(e.to_string()))?
             .map_err(|e| Error::ConnectionFailed(format!("cannot connect to {target}: {e}")))?;

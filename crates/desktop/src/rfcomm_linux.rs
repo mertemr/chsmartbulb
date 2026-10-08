@@ -30,6 +30,7 @@ struct SockaddrRc {
 pub struct RfcommConnector {
     address: String,
     bdaddr: [u8; 6],
+    channel: u8,
 }
 
 impl RfcommConnector {
@@ -39,7 +40,13 @@ impl RfcommConnector {
             parts.try_into().map_err(|_| crate::Error::Bluetooth(format!("not a Bluetooth address: {address}")))?;
         let mut bdaddr = bytes;
         bdaddr.reverse(); // BlueZ keeps addresses least significant byte first
-        Ok(Self { address: address.to_ascii_uppercase(), bdaddr })
+        Ok(Self { address: address.to_ascii_uppercase(), bdaddr, channel: RFCOMM_CHANNEL })
+    }
+
+    /// Use another RFCOMM channel than the bulb's usual one.
+    pub fn channel(mut self, channel: u8) -> Self {
+        self.channel = channel;
+        self
     }
 
     async fn attempt(&self) -> io::Result<OwnedFd> {
@@ -53,7 +60,7 @@ impl RfcommConnector {
         // SAFETY: `raw` is a fresh descriptor nobody else owns.
         let fd = unsafe { OwnedFd::from_raw_fd(raw) };
         let address =
-            SockaddrRc { family: AF_BLUETOOTH as libc::sa_family_t, bdaddr: self.bdaddr, channel: RFCOMM_CHANNEL };
+            SockaddrRc { family: AF_BLUETOOTH as libc::sa_family_t, bdaddr: self.bdaddr, channel: self.channel };
         // SAFETY: the address struct matches `struct sockaddr_rc` and outlives the call.
         let started = unsafe {
             libc::connect(
@@ -98,7 +105,7 @@ impl RfcommConnector {
 #[async_trait]
 impl Connector for RfcommConnector {
     async fn connect(&self) -> Result<Arc<dyn Link>> {
-        let target = format!("{} channel {RFCOMM_CHANNEL}", self.address);
+        let target = format!("{} channel {}", self.address, self.channel);
         for attempt in 0..=BUSY_RETRIES {
             match self.attempt().await {
                 Ok(fd) => {

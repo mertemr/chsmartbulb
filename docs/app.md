@@ -79,8 +79,8 @@ send them too, and the interface says when the light is resting and offers to sh
 
 *Try the app with a simulated one*, at the bottom of the first screen, drives an in-memory bulb
 that behaves like the real one. The same simulation runs the Rust tests, and
-`cargo run -p chsmartbulb-core --features server --example serve` serves it on ports 8377 and
-8378 for trying the web interface and the command line.
+`cargo run -p chsmartbulb-daemon -- --simulate --listen 8377 --web 8378 --no-token` serves it on
+ports 8377 and 8378 for trying the web interface and the command line.
 
 ## Background
 

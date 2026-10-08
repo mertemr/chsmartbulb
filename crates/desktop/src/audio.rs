@@ -1,8 +1,8 @@
 //! Sound capture on the desktop, for the effects that follow the music.
 //!
-//! Linux takes the monitor of the default output (or the default input) through the
-//! `parec` tool, as the Python service does; PipeWire and PulseAudio both offer it.
-//! Windows takes a WASAPI loopback of the default output (or the default input).
+//! Linux takes the monitor of the default output (or the default input, or a named
+//! source) through the `parec` tool, as the Python service does; PipeWire and PulseAudio
+//! both offer it. Windows takes a WASAPI loopback of the default output (or the default input).
 
 use std::sync::{Arc, Mutex};
 
@@ -11,16 +11,22 @@ use chsmartbulb_core::audio::{Analyzer, AudioSource};
 use chsmartbulb_core::service::AudioCapture;
 use chsmartbulb_core::{Error, Result};
 
-use crate::models::AudioInput;
-
 pub struct DesktopAudio {
-    input: AudioInput,
+    microphone: bool,
+    device: Option<String>,
     running: Mutex<Option<Running>>,
 }
 
 impl DesktopAudio {
-    pub fn new(input: AudioInput) -> Self {
-        Self { input, running: Mutex::new(None) }
+    /// Listens to what the computer plays, or to its microphone.
+    pub fn new(microphone: bool) -> Self {
+        Self { microphone, device: None, running: Mutex::new(None) }
+    }
+
+    /// Capture from this source instead of the default one (a PulseAudio source name; Linux only).
+    pub fn device(mut self, device: Option<String>) -> Self {
+        self.device = device;
+        self
     }
 }
 
@@ -43,8 +49,9 @@ impl AudioCapture for DesktopAudio {
         use tokio::io::AsyncReadExt;
 
         const RATE: u32 = chsmartbulb_core::audio::RATE;
-        let microphone = self.input == AudioInput::Microphone;
-        let device = if microphone { "@DEFAULT_SOURCE@" } else { "@DEFAULT_MONITOR@" };
+        let microphone = self.microphone;
+        let default = if microphone { "@DEFAULT_SOURCE@" } else { "@DEFAULT_MONITOR@" };
+        let device = self.device.as_deref().unwrap_or(default);
         let mut child = tokio::process::Command::new("parec")
             .args([&format!("--device={device}"), "--format=s16le", &format!("--rate={RATE}")])
             .args(["--channels=2", "--raw", "--latency-msec=20"])
@@ -79,6 +86,14 @@ impl AudioCapture for DesktopAudio {
             running.task.abort();
         }
     }
+
+    fn alive(&self) -> bool {
+        self.running
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .is_some_and(|running| !running.task.is_finished())
+    }
 }
 
 #[cfg(windows)]
@@ -90,7 +105,7 @@ struct Running {
 #[async_trait]
 impl AudioCapture for DesktopAudio {
     async fn start(&self, source: Arc<AudioSource>) -> Result<()> {
-        let microphone = self.input == AudioInput::Microphone;
+        let microphone = self.microphone;
         let (stop, stopped) = std::sync::mpsc::channel::<()>();
         let (ready, started) = tokio::sync::oneshot::channel::<Result<()>>();
         std::thread::Builder::new()
