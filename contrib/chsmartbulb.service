@@ -3,7 +3,8 @@ Description=CHSmartBulb light service
 After=bluetooth.target pipewire-pulse.service
 
 [Service]
-Environment=CHSMARTBULB_ADDRESS=AA:BB:CC:DD:EE:FF
+# The address is read from ~/.config/chsmartbulb/config; to give it here instead:
+# Environment=CHSMARTBULB_ADDRESS=AA:BB:CC:DD:EE:FF
 # Path to the chsmartbulb executable, for example the one in the project's .venv/bin
 ExecStart=/path/to/chsmartbulb daemon
 Restart=on-failure
