@@ -213,6 +213,10 @@ def test_sound_effect_starts_and_stops_the_audio_capture():
         await daemon.handle({"cmd": "effect", "name": "music"})
         source = FakeMusic.created[-1]
         assert source.running
+        # retuning the effect, or moving to another that listens, keeps the capture open
+        await daemon.handle({"cmd": "effect", "name": "music", "params": {"delay": 0.2}})
+        await daemon.handle({"cmd": "effect", "name": "spectrum"})
+        assert [made for made in FakeMusic.created if made.running] == [source]
         await daemon.handle({"cmd": "color", "color": "red"})
         assert not source.running
         await daemon.close()

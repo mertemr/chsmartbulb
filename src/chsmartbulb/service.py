@@ -57,10 +57,15 @@ class _Feed:
     local: Callable[[], Any]
     agents: int = 0
     active: Any = None  # the source the running effect reads
+    chosen: Any = None  # the choice() it was made under
     options: dict[str, Any] = field(default_factory=dict)  # what this machine's own capture is asked for
 
     def source(self) -> Any:
         return self.remote if self.agents else self.local(**self.options)
+
+    def choice(self) -> Any:
+        """What decides the source: an effect replaced under the same choice keeps the one it had."""
+        return bool(self.agents), dict(self.options)
 
 
 @dataclass
@@ -287,7 +292,14 @@ class BulbService:
 
     async def _apply(self, *, fade: bool = False, duration: float | None = None) -> None:
         """Make the bulb show the plan. Does nothing while disconnected; the supervisor retries."""
-        await self._stop_effect()
+        # the captures stay up while the effect is replaced: reopening one disturbs what is playing
+        held = await self._halt_effect()
+        try:
+            await self._show(held, fade=fade, duration=duration)
+        finally:
+            await self._release(held)  # whatever the light no longer follows
+
+    async def _show(self, held: dict[str, Any], *, fade: bool, duration: float | None) -> None:
         if not self._bulb.is_connected:
             return
         plan = self._plan
@@ -300,7 +312,7 @@ class BulbService:
             if not plan.on:
                 await self._bulb.turn_off(fade=fade)
             elif plan.effect is not None:
-                await self._start_effect(plan.effect, duration)
+                await self._start_effect(plan.effect, duration, held)
             elif plan.native is not None:
                 native = NativeEffect[plan.native["name"].upper()]
                 await self._bulb.set_native_effect(native, plan.color, speed=plan.native["speed"])
@@ -393,28 +405,44 @@ class BulbService:
 
     # --- effects ----------------------------------------------------------------------
 
-    async def _start_effect(self, spec: Mapping[str, Any], duration: float | None) -> None:
+    async def _start_effect(self, spec: Mapping[str, Any], duration: float | None, held: dict[str, Any]) -> None:
         needs = catalog.CATALOG[spec["name"]].needs
         sources = {}
         if needs is not None:
             feed = self._feeds[needs]
-            try:
-                feed.active = feed.source()
-            except SmartBulbError as exc:
-                # e.g. nothing to capture with on this machine: stay dark until an agent brings a feed
-                log.warning("%s effect has no input: %s", spec["name"], exc)
-                feed.active = feed.remote
+            choice = feed.choice()
+            if needs in held and feed.chosen == choice:
+                feed.active = held.pop(needs)
+            else:
+                try:
+                    feed.active = feed.source()
+                except SmartBulbError as exc:
+                    # e.g. nothing to capture with on this machine: stay dark until an agent brings a feed
+                    log.warning("%s effect has no input: %s", spec["name"], exc)
+                    feed.active = feed.remote
+            feed.chosen = choice
             await feed.active.start()
             sources[needs] = feed.active
         effect = catalog.create(spec["name"], spec.get("params"), **sources)
         self._effect_task = asyncio.create_task(self._run_effect(effect, duration))
         self._effect_task.add_done_callback(lambda _task: self._notify())
 
-    async def _release_sources(self) -> None:
-        for feed in self._feeds.values():
+    def _hold_sources(self) -> dict[str, Any]:
+        """Take the sources the effect followed, for the next effect or to release."""
+        held = {}
+        for kind, feed in self._feeds.items():
             source, feed.active = feed.active, None
             if source is not None:
-                await source.stop()
+                held[kind] = source
+        return held
+
+    async def _release(self, held: dict[str, Any]) -> None:
+        for source in held.values():
+            await source.stop()
+        held.clear()
+
+    async def _release_sources(self) -> None:
+        await self._release(self._hold_sources())
 
     async def _run_effect(self, effect: effects.Effect, duration: float | None) -> None:
         try:
@@ -535,12 +563,15 @@ class BulbService:
             raise ValueError(f"no monitor {index}; this machine has 1 to {max(area['index'] for area in monitors)}")
 
     async def _stop_effect(self) -> None:
+        await self._release(await self._halt_effect())
+
+    async def _halt_effect(self) -> dict[str, Any]:
         task, self._effect_task = self._effect_task, None
         if task is not None:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-        await self._release_sources()
+        return self._hold_sources()
 
     @property
     def _playing(self) -> bool:
