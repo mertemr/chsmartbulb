@@ -60,11 +60,50 @@ def test_catalog_rejects_unknown_names_parameters_and_values():
 
 def test_describe_is_plain_data_covering_every_effect():
     listing = catalog.describe()
-    assert {entry["name"] for entry in listing} == set(catalog.CATALOG)
+    assert [entry["name"] for entry in listing] == [
+        "breathe",
+        "hue",
+        "pulse",
+        "strobe",
+        "candle",
+        "palette",
+        "police",
+        "custom",
+        "music",
+        "spectrum",
+        "volume",
+        "stereo",
+        "beathue",
+        "tempo",
+        "centroid",
+        "drop",
+        "ambient",
+        "screen",
+    ]
+    schema = {key: spec for entry in listing for key, spec in entry["schema"].items()}
+    for key, (low, high, step) in {
+        "slow": (40.0, 240.0, 1.0),
+        "fast": (40.0, 240.0, 1.0),
+        "flash": (0.1, 2.0, 0.05),
+        "build": (0.5, 10.0, 0.5),
+        "step": (1.0, 180.0, 1.0),
+    }.items():
+        assert schema[key] == {"type": "number", "min": low, "max": high, "step": step}
     breathe = next(entry for entry in listing if entry["name"] == "breathe")
     assert breathe["params"] == {"color": "#ff0000", "period": 4.0, "floor": 0.0}
     needs = {entry["name"]: entry["needs"] for entry in listing if entry["needs"]}
-    assert needs == {"music": "audio", "spectrum": "audio", "volume": "audio", "stereo": "audio", "screen": "screen"}
+    assert needs == {
+        "music": "audio",
+        "spectrum": "audio",
+        "volume": "audio",
+        "stereo": "audio",
+        "beathue": "audio",
+        "tempo": "audio",
+        "centroid": "audio",
+        "drop": "audio",
+        "ambient": "audio",
+        "screen": "screen",
+    }
 
 
 def test_candle_flickers_within_its_depth_and_palette_blends():
@@ -648,3 +687,217 @@ def test_cli_passes_the_microphone_choice_on():
     args = cli.build_parser().parse_args(["--mic", "audio-agent"])
     assert cli._music(args).keywords["mic"] is True
     assert cli._music(cli.build_parser().parse_args(["audio-agent"])).keywords["mic"] is False
+
+
+def test_beathue_steps_the_hue_and_keeps_a_floor():
+    source = FakeMusic()
+    effect = catalog.create("beathue", {"step": 120, "floor": 0.2, "decay": 5}, audio=source)
+    assert effect(0.0) == Color(r=51)  # never beat and silent: the floor, in the first hue (red)
+    source.beat(at=10.0)
+    source.now = 10.0
+    assert effect(0.0) == Color(g=255)  # one step of 120 degrees is green, at full level
+    source.now = 13.0
+    assert effect(3.0) == Color(g=51)  # decayed to the floor
+    source.beat(at=13.0)
+    assert effect(3.0) == Color(b=255)  # two steps: blue
+
+
+def test_beathue_refuses_what_does_not_fit():
+    source = FakeMusic()
+    bad = ({"step": 0}, {"step": 200}, {"decay": 0}, {"floor": 2}, {"saturation": -1}, {"sensitivity": 2}, {"delay": 5})
+    for params in bad:
+        with pytest.raises(ValueError):
+            catalog.create("beathue", params, audio=source)
+
+
+def test_tempo_colours_by_how_fast_the_beats_come():
+    source = FakeMusic()
+    source.levels = music.Levels(bass=1.0)
+    params = {"slow": 80, "fast": 120, "smoothing": 0}
+    tempo = catalog.create("tempo", params, audio=source)
+    source.beat(at=10.0)
+    source.now = 10.0
+    tempo(0.0)  # the first beat gives no interval yet
+    source.beat(at=10.5)
+    source.now = 10.5
+    assert tempo(0.5) == Color(g=160, b=255)  # 120 bpm is the fast end
+    source.beat(at=10.7)  # 0.2 s apart is no tempo
+    assert tempo(0.7) == Color(g=160, b=255)
+    source.beat(at=12.6)  # neither is 2 s
+    assert tempo(2.6) == Color(g=160, b=255)
+    source.now = 30.0
+    assert tempo(20.0) == Color(g=160, b=255)  # without beats the estimate holds
+
+    slow = catalog.create("tempo", params, audio=source)
+    source.beat(at=40.0)
+    slow(0.0)
+    source.beat(at=41.0)
+    assert slow(1.0) == Color(r=255, g=60)  # 60 bpm is below slow
+
+
+def test_tempo_reads_beats_that_arrive_between_two_frames():
+    source = FakeMusic()
+    source.levels = music.Levels(bass=1.0)
+    tempo = catalog.create("tempo", {"slow": 80, "fast": 120, "smoothing": 0}, audio=source)
+    source.beat(at=10.0)
+    tempo(0.0)
+    source.beat(at=10.5)
+    source.beat(at=11.0)  # two beats before the next frame: 0.5 s apart, not one 1 s beat
+    assert tempo(1.0) == Color(g=160, b=255)
+
+
+def test_tempo_is_dark_in_silence_and_refuses_what_does_not_fit():
+    source = FakeMusic()
+    tempo = catalog.create("tempo", {}, audio=source)
+    assert tempo(0.0) == Color()  # never beat and silent
+    for params in ({"slow": 120, "fast": 120}, {"slow": 160, "fast": 80}, {"smoothing": -1}, {"sensitivity": 2}):
+        with pytest.raises(ValueError):
+            catalog.create("tempo", params, audio=source)
+
+
+def test_tempo_ignores_beats_from_before_it_started():
+    source = FakeMusic()
+    source.levels = music.Levels(bass=1.0)
+    source.beat(at=10.0)  # beat before the effect exists
+    source.now = 10.0
+    tempo = catalog.create("tempo", {"slow": 80, "fast": 120, "smoothing": 0}, audio=source)
+    tempo(0.0)  # call once before the next beat: sets previous to 10.0 with the fix
+    source.beat(at=10.5)  # 0.5 s later would be fast, but previous was from before the effect started
+    source.now = 10.5
+    assert tempo(0.5) != Color(g=160, b=255)  # not the fast colour yet (interval from before effect)
+    source.beat(at=11.0)  # now 0.5 s from the previous beat seen by the effect
+    source.now = 11.0
+    assert tempo(1.0) == Color(g=160, b=255)  # 120 bpm is the fast end
+
+
+def test_centroid_blends_by_where_the_weight_lies():
+    source = FakeMusic()
+    centroid = catalog.create("centroid", {"low": "ff0000", "high": "0000ff", "width": 1, "release": 2.0}, audio=source)
+    assert centroid(0.0) == Color()  # silent: dark, and no division by zero
+    source.levels = music.Levels(bass=1.0)
+    assert centroid(1.0) == Color(r=255)  # all bass is the low colour
+    source.levels = music.Levels(treble=1.0)
+    assert centroid(1.05) == Color(r=183, b=72)  # on its way to the high colour
+    source.levels = music.Levels()
+    assert centroid(2.0) == Color()  # silence: step 0.95 makes faded 0, position untouched
+    source.levels = music.Levels(treble=1.0)
+    assert centroid(2.05) == Color(b=255)  # out of the dark, position jumps to target 1.0 at once
+    source.levels = music.Levels()
+    assert centroid(2.15) == Color(b=163)  # silence: faded = 0.8, level 0.64, position stays 1.0
+
+
+def test_centroid_refuses_what_does_not_fit():
+    source = FakeMusic()
+    with pytest.raises(ValueError, match="width"):
+        catalog.create("centroid", {"width": 0}, audio=source)
+    with pytest.raises(ValueError, match="delay"):
+        catalog.create("centroid", {"delay": 5}, audio=source)
+
+
+def advance(effect, t, seconds, step=0.05):
+    """Run an effect for ``seconds`` in frames of ``step``; return the time and the last frame."""
+    frame = None
+    for _ in range(round(seconds / step)):
+        t += step
+        frame = effect(t)
+    return t, frame
+
+
+def test_drop_flashes_when_the_music_comes_back_after_a_lull():
+    source = FakeMusic()
+    effect = catalog.create("drop", {"color": "00ff00", "flash": 0.4, "build": 3.0}, audio=source)
+    source.levels = music.Levels(bass=1.0)
+    t, _ = advance(effect, 0.0, 20)  # steady loud music
+    source.beat(at=t)
+    t += 0.05
+    assert effect(t).g < 255  # a beat in steady music is no drop
+    source.levels = music.Levels()
+    t, quiet = advance(effect, t, 8)
+    assert 0 < quiet.g < 100  # a dim glow in the lull
+    source.levels = music.Levels(bass=1.0)
+    source.beat(at=t + 0.05)
+    t += 0.05
+    began = t
+    assert effect(t) == Color(g=255)  # the drop: flash on
+    assert effect(began + 0.07) == Color()  # and off, at 8 Hz
+    assert effect(began + 0.5).g < 255  # after the flash it is the music's glow again
+
+
+def test_drop_ignores_music_that_comes_back_gently():
+    source = FakeMusic()
+    effect = catalog.create("drop", {"color": "00ff00"}, audio=source)
+    source.levels = music.Levels(bass=1.0)
+    t, _ = advance(effect, 0.0, 20)
+    source.levels = music.Levels()
+    t, _ = advance(effect, t, 8)  # a lull
+    source.levels = music.Levels(bass=0.3)
+    t, _ = advance(effect, t, 45)  # back, but quietly: the lull is forgotten after 30 s
+    source.levels = music.Levels(bass=1.0)
+    source.beat(at=t + 0.05)
+    t += 0.05
+    assert effect(t).g < 255  # an ordinary beat much later is not a drop
+
+
+def test_drop_still_flashes_after_a_build_up():
+    source = FakeMusic()
+    effect = catalog.create("drop", {"color": "00ff00"}, audio=source)
+    source.levels = music.Levels(bass=1.0)
+    t, _ = advance(effect, 0.0, 20)
+    source.levels = music.Levels()
+    t, _ = advance(effect, t, 8)  # a lull
+    source.levels = music.Levels(bass=0.5)
+    t, _ = advance(effect, t, 12)  # building back up, no beats
+    source.levels = music.Levels(bass=1.0)
+    source.beat(at=t + 0.05)
+    t += 0.05
+    assert effect(t) == Color(g=255)  # the lull is still remembered: this is the drop
+
+
+def test_drop_goes_dark_in_long_silence():
+    source = FakeMusic()
+    effect = catalog.create("drop", {"color": "00ff00"}, audio=source)
+    source.levels = music.Levels(bass=1.0)
+    t, _ = advance(effect, 0.0, 20)
+    source.levels = music.Levels()
+    t, frame = advance(effect, t, 120)
+    assert frame == Color()
+
+
+def test_numbers_must_be_finite():
+    for bad in ("inf", "nan", float("inf"), float("nan")):
+        with pytest.raises(ValueError, match="finite"):
+            catalog.resolve("beathue", {"decay": bad})
+    assert catalog.resolve("beathue", {"decay": "2.5"})["decay"] == 2.5
+
+
+def test_drop_refuses_what_does_not_fit():
+    source = FakeMusic()
+    for params in ({"flash": 0}, {"build": 0}, {"sensitivity": 2}, {"delay": 5}):
+        with pytest.raises(ValueError):
+            catalog.create("drop", params, audio=source)
+
+
+def test_ambient_breathes_and_never_goes_dark():
+    source = FakeMusic()
+    ambient = catalog.create(
+        "ambient", {"base": "c80000", "accent": "0000ff", "period": 6.0, "decay": 5.0}, audio=source
+    )
+    assert ambient(0.0) == Color(r=50)  # never beat and silent: 200 * 0.25
+    assert ambient(3.0) == Color(r=100)  # half way through the swell: 200 * 0.5
+    source.beat(at=10.0)
+    source.now = 10.0
+    assert ambient(3.0) == Color(b=255)  # a beat shows the accent
+    source.now = 20.0
+    assert ambient(3.0) == Color(r=100)  # and the breathing is back
+
+
+def test_ambient_refuses_what_does_not_fit():
+    source = FakeMusic()
+    for params, name in (
+        ({"period": 0}, "period"),
+        ({"decay": 0}, "decay"),
+        ({"sensitivity": 2}, "sensitivity"),
+        ({"delay": 5}, "delay"),
+    ):
+        with pytest.raises(ValueError, match=name):
+            catalog.create("ambient", params, audio=source)

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from . import effects, music, screen
-from .color import BLUE, GREEN, RED, Color, parse_color
+from .color import BLUE, GREEN, RED, WHITE, Color, parse_color
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -45,6 +46,11 @@ _RANGES: dict[str, tuple[float, float, float]] = {
     "white": (0.0, 1.0, 0.01),
     "balance": (0.0, 1.0, 0.01),
     "speed": (0.1, 5.0, 0.1),
+    "step": (1.0, 180.0, 1.0),
+    "slow": (40.0, 240.0, 1.0),
+    "fast": (40.0, 240.0, 1.0),
+    "flash": (0.1, 2.0, 0.05),
+    "build": (0.5, 10.0, 0.5),
 }
 
 _CUSTOM_STEPS = tuple(
@@ -104,6 +110,55 @@ _ENTRIES = [
         needs="audio",
     ),
     EffectInfo(
+        "beathue",
+        "the colour turns on every beat, the brightness follows the bass",
+        music.music_beathue,
+        {
+            "step": 47.0,
+            "decay": 5.0,
+            "floor": 0.1,
+            "saturation": 1.0,
+            "delay": 0.0,
+            "sensitivity": music.DEFAULT_SENSITIVITY,
+        },
+        needs="audio",
+    ),
+    EffectInfo(
+        "tempo",
+        "warm for slow music, cool for fast, by the gaps between beats",
+        music.music_tempo,
+        {"slow": 80.0, "fast": 160.0, "smoothing": 2.0, "delay": 0.0, "sensitivity": music.DEFAULT_SENSITIVITY},
+        needs="audio",
+    ),
+    EffectInfo(
+        "centroid",
+        "blend two colours by whether the sound is bass-heavy or bright",
+        music.music_centroid,
+        {"low": RED, "high": BLUE, "width": 2.0, "release": 3.0, "delay": 0.0},
+        needs="audio",
+    ),
+    EffectInfo(
+        "drop",
+        "opens up as the music builds, flashes when it drops back in",
+        music.music_drop,
+        {"color": WHITE, "flash": 0.4, "build": 3.0, "delay": 0.0, "sensitivity": music.DEFAULT_SENSITIVITY},
+        needs="audio",
+    ),
+    EffectInfo(
+        "ambient",
+        "a calm colour that breathes, an accent on the beats; never dark",
+        music.music_ambient,
+        {
+            "base": effects.WARM,
+            "accent": WHITE,
+            "period": 6.0,
+            "decay": 5.0,
+            "delay": 0.0,
+            "sensitivity": music.DEFAULT_SENSITIVITY,
+        },
+        needs="audio",
+    ),
+    EffectInfo(
         "screen",
         "follow the colour of the screen",
         screen.screen_follow,
@@ -140,9 +195,13 @@ def _coerce(key: str, default: Any, value: Any) -> Any:
         return tuple(value)  # the effect checks each step when it is built
     if isinstance(default, float) and not isinstance(value, bool):
         try:
-            return float(value)
+            result = float(value)
         except (TypeError, ValueError):
             pass
+        else:
+            if not math.isfinite(result):
+                raise ValueError(f"{key} must be a finite number, got {value!r}")
+            return result
     raise ValueError(f"{key} must be a number, got {value!r}")
 
 

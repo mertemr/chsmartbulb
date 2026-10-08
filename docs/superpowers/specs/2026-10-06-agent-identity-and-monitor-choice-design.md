@@ -57,4 +57,4 @@ that monitor. `--monitor` stays as the first choice. `screen.list_monitors()` re
 
 Python: hello and registry, monitor routing and error cases, remembered choice after a reconnect,
 the agent restarting on an event (fake source), local restart, an old agent without hello.
-Rust: the same against `Session`. Web: `pnpm`/`npm run check` and build.
+Rust: the same against `Session`. Web: `pnpm check` and build.

@@ -39,6 +39,27 @@ const ONSET_CAP: f64 = 100.0;
 /// Seconds for the stereo position to settle.
 const PAN_SMOOTHING: f64 = 0.15;
 const DARK: f64 = 1.0 / 255.0;
+const TEMPO_SLOW: Color = Color::rgb(255, 60, 0);
+const TEMPO_FAST: Color = Color::rgb(0, 160, 255);
+/// Seconds between beats that count as a tempo: 240 to 40 bpm.
+const TEMPO_INTERVALS: (f64, f64) = (0.25, 1.5);
+/// Share of a new interval in the estimate.
+const TEMPO_BLEND: f64 = 0.3;
+/// Brightness falls this much per second.
+const TEMPO_RELEASE: f64 = 3.0;
+/// Seconds; the long average the lull is measured against.
+const DROP_SLOW: f64 = 8.0;
+/// A lull: the short average under this share of the long one.
+const LULL_RATIO: f64 = 0.35;
+/// And the long one above this, so there was something to fall from.
+const LULL_FLOOR: f64 = 0.05;
+/// Seconds a lull must last.
+const LULL_HOLD: f64 = 0.5;
+/// Seconds `lulled` is remembered once the lull is over.
+const LULL_MEMORY: f64 = 30.0;
+/// A drop's beat must be this loud.
+const DROP_ENERGY: f64 = 0.6;
+const FLASH_HZ: f64 = 8.0;
 
 /// A source of seconds on a steady time base.
 pub type Clock = Arc<dyn Fn() -> f64 + Send + Sync>;
@@ -359,6 +380,249 @@ pub fn music_pulse(
     }))
 }
 
+/// Turn the colour by `step` degrees on every beat; flash and glow with the bass.
+///
+/// Between beats the light falls to `floor` of its brightness, never fully dark.
+pub fn music_beathue(
+    source: Arc<AudioSource>,
+    step: f64,
+    decay: f64,
+    floor: f64,
+    saturation: f64,
+    delay: f64,
+    sensitivity: f64,
+) -> Result<Effect> {
+    if !(1.0..=180.0).contains(&step) {
+        return Err(invalid("step must be within 1..180 degrees"));
+    }
+    if decay <= 0.0 {
+        return Err(invalid("decay must be positive"));
+    }
+    if !(0.0..=1.0).contains(&floor) {
+        return Err(invalid("floor must be within 0..1"));
+    }
+    if !(0.0..=1.0).contains(&saturation) {
+        return Err(invalid("saturation must be within 0..1"));
+    }
+    source.set_delay(delay)?;
+    source.set_sensitivity(sensitivity)?;
+    Ok(Box::new(move |_t| {
+        let heard = source.heard();
+        let flash = (-decay * (heard.now - heard.last_beat)).exp();
+        let level = floor + (1.0 - floor) * flash.max(0.6 * heard.levels.bass);
+        if level < DARK {
+            return OFF;
+        }
+        Color::from_hsv(heard.beats as f64 * step, saturation, 1.0).scaled(level)
+    }))
+}
+
+/// Warm for slow music, cool for fast; brightness follows the loudness.
+///
+/// The tempo is estimated from the gaps between beats. `slow` and `fast` (bpm) are the
+/// tempos shown as the warm and the cool end, `smoothing` the seconds the colour takes to settle.
+pub fn music_tempo(
+    source: Arc<AudioSource>,
+    slow: f64,
+    fast: f64,
+    smoothing: f64,
+    delay: f64,
+    sensitivity: f64,
+) -> Result<Effect> {
+    if slow >= fast {
+        return Err(invalid("slow must be below fast"));
+    }
+    if smoothing < 0.0 {
+        return Err(invalid("smoothing must not be negative"));
+    }
+    source.set_delay(delay)?;
+    source.set_sensitivity(sensitivity)?;
+    let mut estimate: Option<f64> = None; // seconds between beats
+    let mut previous: Option<f64> = None;
+    let mut seen = source.heard().beats;
+    let mut position = 0.5f64;
+    let mut shown = 0.0f64;
+    let mut last = 0.0;
+    Ok(Box::new(move |t| {
+        let step = (t - last).max(0.0);
+        last = t;
+        let heard = source.heard();
+        if heard.beats != seen {
+            if heard.beats > seen {
+                if let Some(before) = previous {
+                    let interval = (heard.last_beat - before) / (heard.beats - seen) as f64;
+                    if (TEMPO_INTERVALS.0..=TEMPO_INTERVALS.1).contains(&interval) {
+                        estimate = Some(match estimate {
+                            Some(old) => (1.0 - TEMPO_BLEND) * old + TEMPO_BLEND * interval,
+                            None => interval,
+                        });
+                    }
+                }
+            }
+            seen = heard.beats;
+            previous = Some(heard.last_beat);
+        }
+        let target = match estimate {
+            Some(interval) => ((60.0 / interval - slow) / (fast - slow)).clamp(0.0, 1.0),
+            None => 0.5,
+        };
+        if smoothing > 0.0 {
+            position += (target - position) * (1.0 - (-step / smoothing).exp());
+        } else {
+            position = target;
+        }
+        shown = heard.levels.loudness().max(shown - TEMPO_RELEASE * step);
+        let level = shown * shown;
+        if level < DARK {
+            return OFF;
+        }
+        TEMPO_SLOW.mix(&TEMPO_FAST, position).scaled(level)
+    }))
+}
+
+/// Blend between two colours by where the sound's weight lies between bass and treble.
+///
+/// The weight of real music seldom passes the middle, so `width` stretches it.
+/// Brightness follows the loudness.
+pub fn music_centroid(
+    source: Arc<AudioSource>,
+    low: Color,
+    high: Color,
+    width: f64,
+    release: f64,
+    delay: f64,
+) -> Result<Effect> {
+    if width <= 0.0 {
+        return Err(invalid("width must be positive"));
+    }
+    source.set_delay(delay)?;
+    let mut shown = 0.0f64;
+    let mut position = 0.0f64;
+    let mut last = 0.0;
+    Ok(Box::new(move |t| {
+        let step = (t - last).max(0.0);
+        last = t;
+        let levels = source.heard().levels;
+        let total = levels.bass + levels.mid + levels.treble;
+        let faded = (shown - release * step).max(0.0);
+        if total > 0.0 {
+            // silence says nothing about the weight, keep the last one
+            let target = (width * (0.5 * levels.mid + levels.treble) / total).clamp(0.0, 1.0);
+            if faded * faded < DARK {
+                position = target;
+            } else {
+                position += (target - position) * (1.0 - (-step / PAN_SMOOTHING).exp());
+            }
+        }
+        shown = levels.loudness().max(faded);
+        let level = shown * shown;
+        if level >= DARK {
+            low.mix(&high, position).scaled(level)
+        } else {
+            OFF
+        }
+    }))
+}
+
+/// Open up as the music builds and flash when it comes back in after a lull.
+///
+/// `build` is the seconds the light takes to follow the energy, `flash` how long the flash
+/// lasts. The thresholds are tuned on synthetic music, not on real tracks.
+pub fn music_drop(
+    source: Arc<AudioSource>,
+    color: Color,
+    flash: f64,
+    build: f64,
+    delay: f64,
+    sensitivity: f64,
+) -> Result<Effect> {
+    if flash <= 0.0 {
+        return Err(invalid("flash must be positive"));
+    }
+    if build <= 0.0 {
+        return Err(invalid("build must be positive"));
+    }
+    source.set_delay(delay)?;
+    source.set_sensitivity(sensitivity)?;
+    let mut fast = 0.0f64;
+    let mut slow = 0.0f64;
+    let mut lull = 0.0f64;
+    let mut since = 0.0f64;
+    let mut lulled = false;
+    let mut seen = source.heard().beats;
+    let mut began = f64::NEG_INFINITY;
+    let mut last = 0.0;
+    Ok(Box::new(move |t| {
+        let step = (t - last).max(0.0);
+        last = t;
+        let heard = source.heard();
+        let energy = heard.levels.loudness();
+        fast += (energy - fast) * (1.0 - (-step / build).exp());
+        slow += (energy - slow) * (1.0 - (-step / DROP_SLOW).exp());
+        if slow > LULL_FLOOR && fast < LULL_RATIO * slow {
+            lull += step;
+            since = 0.0;
+            if lull >= LULL_HOLD {
+                lulled = true;
+            }
+        } else {
+            lull = 0.0;
+            if lulled {
+                since += step;
+                if since >= LULL_MEMORY {
+                    // the lull is long forgotten: a beat now is not a drop
+                    lulled = false;
+                    since = 0.0;
+                }
+            }
+        }
+        let arrived = heard.beats != seen;
+        seen = heard.beats;
+        if arrived && lulled && energy >= DROP_ENERGY {
+            lulled = false;
+            since = 0.0;
+            began = t;
+        }
+        if t - began < flash {
+            return if ((t - began) * FLASH_HZ).rem_euclid(1.0) < 0.5 { color } else { OFF };
+        }
+        let glow = 0.15 * (slow / LULL_FLOOR).min(1.0) + 0.6 * fast;
+        if glow >= DARK {
+            color.scaled(glow)
+        } else {
+            OFF
+        }
+    }))
+}
+
+/// A calm colour that breathes every `period` seconds, with `accent` flashing on the beats.
+///
+/// Never dark: in silence it is only the breathing.
+pub fn music_ambient(
+    source: Arc<AudioSource>,
+    base: Color,
+    accent: Color,
+    period: f64,
+    decay: f64,
+    delay: f64,
+    sensitivity: f64,
+) -> Result<Effect> {
+    if period <= 0.0 {
+        return Err(invalid("period must be positive"));
+    }
+    if decay <= 0.0 {
+        return Err(invalid("decay must be positive"));
+    }
+    source.set_delay(delay)?;
+    source.set_sensitivity(sensitivity)?;
+    Ok(Box::new(move |t| {
+        let heard = source.heard();
+        let swell = 0.5 - 0.5 * (2.0 * PI * t / period).cos();
+        let flash = (-decay * (heard.now - heard.last_beat)).exp();
+        base.scaled(0.25 + 0.25 * swell).mix(&accent, flash)
+    }))
+}
+
 /// Bass drives red, mids green and treble blue; `release` is the fall rate per second.
 pub fn music_spectrum(source: Arc<AudioSource>, release: f64, delay: f64) -> Result<Effect> {
     source.set_delay(delay)?;
@@ -447,6 +711,8 @@ pub const STEREO_RIGHT: Color = RED;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::color::WHITE;
+    use crate::effects::WARM;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn manual_clock() -> (Clock, Arc<AtomicU64>) {
@@ -531,5 +797,262 @@ mod tests {
         assert_eq!(effect(0.0), RED);
         set(&now, 3.0);
         assert_eq!(effect(3.0), OFF);
+    }
+
+    #[test]
+    fn beathue_steps_the_hue_and_keeps_a_floor() {
+        let (clock, now) = manual_clock();
+        let source = AudioSource::new(clock);
+        let mut effect = music_beathue(source.clone(), 120.0, 5.0, 0.2, 1.0, 0.0, 0.5).unwrap();
+        assert_eq!(effect(0.0), Color::rgb(51, 0, 0)); // never beat and silent: the floor, in red
+        set(&now, 10.0);
+        source.publish(Levels::default(), 10.0); // a beat, the bass silent
+        assert_eq!(effect(0.0), Color::rgb(0, 255, 0));
+        set(&now, 13.0);
+        assert_eq!(effect(3.0), Color::rgb(0, 51, 0));
+        source.publish(Levels::default(), 10.0);
+        assert_eq!(effect(3.0), Color::rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn beathue_refuses_what_does_not_fit() {
+        let (clock, _) = manual_clock();
+        let source = AudioSource::new(clock);
+        for (step, decay, floor, saturation, delay, sensitivity) in [
+            (0.0, 5.0, 0.1, 1.0, 0.0, 0.5),
+            (200.0, 5.0, 0.1, 1.0, 0.0, 0.5),
+            (47.0, 0.0, 0.1, 1.0, 0.0, 0.5),
+            (47.0, 5.0, 2.0, 1.0, 0.0, 0.5),
+            (47.0, 5.0, 0.1, -1.0, 0.0, 0.5),
+            (47.0, 5.0, 0.1, 1.0, 5.0, 0.5),
+            (47.0, 5.0, 0.1, 1.0, 0.0, 2.0),
+        ] {
+            assert!(music_beathue(source.clone(), step, decay, floor, saturation, delay, sensitivity).is_err());
+        }
+    }
+
+    #[test]
+    fn tempo_colours_by_how_fast_the_beats_come() {
+        let (clock, now) = manual_clock();
+        let source = AudioSource::new(clock);
+        let loud = Levels { bass: 1.0, ..Levels::default() };
+        let mut effect = music_tempo(source.clone(), 80.0, 120.0, 0.0, 0.0, 0.5).unwrap();
+        set(&now, 10.0);
+        source.publish(loud, 10.0);
+        effect(0.0); // the first beat gives no interval yet
+        set(&now, 10.5);
+        source.publish(loud, 10.0);
+        assert_eq!(effect(0.5), Color::rgb(0, 160, 255)); // 120 bpm is the fast end
+        set(&now, 10.7);
+        source.publish(loud, 10.0); // 0.2 s apart is no tempo
+        assert_eq!(effect(0.7), Color::rgb(0, 160, 255));
+        set(&now, 12.5);
+        source.publish(loud, 10.0); // neither is 2 s
+        assert_eq!(effect(2.5), Color::rgb(0, 160, 255));
+        set(&now, 30.0);
+        assert_eq!(effect(20.0), Color::rgb(0, 160, 255)); // without beats the estimate holds
+
+        let mut slow = music_tempo(source.clone(), 80.0, 120.0, 0.0, 0.0, 0.5).unwrap();
+        set(&now, 40.0);
+        source.publish(loud, 10.0);
+        slow(0.0);
+        set(&now, 41.0);
+        source.publish(loud, 10.0);
+        assert_eq!(slow(1.0), Color::rgb(255, 60, 0)); // 60 bpm is below slow
+    }
+
+    #[test]
+    fn tempo_reads_beats_that_arrive_between_two_frames() {
+        let (clock, now) = manual_clock();
+        let source = AudioSource::new(clock);
+        let loud = Levels { bass: 1.0, ..Levels::default() };
+        let mut effect = music_tempo(source.clone(), 80.0, 120.0, 0.0, 0.0, 0.5).unwrap();
+        set(&now, 10.0);
+        source.publish(loud, 10.0);
+        effect(0.0);
+        set(&now, 10.5);
+        source.publish(loud, 10.0);
+        set(&now, 11.0);
+        source.publish(loud, 10.0); // two beats before the next frame, 0.5 s apart
+        assert_eq!(effect(1.0), Color::rgb(0, 160, 255));
+    }
+
+    #[test]
+    fn tempo_is_dark_in_silence_and_refuses_what_does_not_fit() {
+        let (clock, _) = manual_clock();
+        let source = AudioSource::new(clock);
+        let mut effect = music_tempo(source.clone(), 80.0, 160.0, 2.0, 0.0, 0.5).unwrap();
+        assert_eq!(effect(0.0), OFF);
+        for (slow, fast, smoothing, sensitivity) in
+            [(120.0, 120.0, 2.0, 0.5), (160.0, 80.0, 2.0, 0.5), (80.0, 160.0, -1.0, 0.5), (80.0, 160.0, 2.0, 2.0)]
+        {
+            assert!(music_tempo(source.clone(), slow, fast, smoothing, 0.0, sensitivity).is_err());
+        }
+    }
+
+    #[test]
+    fn tempo_ignores_beats_from_before_it_started() {
+        let (clock, now) = manual_clock();
+        let source = AudioSource::new(clock);
+        let loud = Levels { bass: 1.0, ..Levels::default() };
+        set(&now, 10.0);
+        source.publish(loud, 10.0); // beat before the effect exists
+        let mut effect = music_tempo(source.clone(), 80.0, 120.0, 0.0, 0.0, 0.5).unwrap();
+        effect(0.0); // trigger the first frame (no beat change yet, seen matches heard.beats)
+        set(&now, 10.5);
+        source.publish(loud, 10.0); // first beat change seen by effect: previous is set to 10.0, no interval calculated
+        assert_ne!(effect(0.5), Color::rgb(0, 160, 255)); // not fast yet (first interval needs two beats after effect started)
+        set(&now, 11.0);
+        source.publish(loud, 10.0); // second beat change: now interval = (11.0 - 10.5) / 1 = 0.5s
+        assert_eq!(effect(1.0), Color::rgb(0, 160, 255)); // 120 bpm is the fast end
+    }
+
+    #[test]
+    fn centroid_blends_by_where_the_weight_lies() {
+        let (clock, _) = manual_clock();
+        let source = AudioSource::new(clock);
+        let mut effect = music_centroid(source.clone(), RED, BLUE, 1.0, 2.0, 0.0).unwrap();
+        assert_eq!(effect(0.0), OFF); // silent: dark, and no division by zero
+        source.publish(Levels { bass: 1.0, ..Levels::default() }, 0.0);
+        assert_eq!(effect(1.0), Color::rgb(255, 0, 0));
+        source.publish(Levels { treble: 1.0, ..Levels::default() }, 0.0);
+        assert_eq!(effect(1.05), Color::rgb(183, 0, 72));
+        source.publish(Levels::default(), 0.0);
+        assert_eq!(effect(2.0), OFF); // silence: step 0.95 makes faded 0, position untouched
+        source.publish(Levels { treble: 1.0, ..Levels::default() }, 0.0);
+        assert_eq!(effect(2.05), Color::rgb(0, 0, 255)); // out of the dark, position jumps to target 1.0 at once
+        source.publish(Levels::default(), 0.0);
+        assert_eq!(effect(2.15), Color::rgb(0, 0, 163)); // silence: faded = 0.8, level 0.64, position stays 1.0
+    }
+
+    #[test]
+    fn centroid_refuses_what_does_not_fit() {
+        let (clock, _) = manual_clock();
+        let source = AudioSource::new(clock);
+        assert!(music_centroid(source.clone(), RED, BLUE, 0.0, 3.0, 0.0).is_err());
+        assert!(music_centroid(source.clone(), RED, BLUE, 2.0, 3.0, 5.0).is_err());
+    }
+
+    fn advance(effect: &mut Effect, t: &mut f64, seconds: f64) -> Color {
+        let mut frame = OFF;
+        for _ in 0..(seconds / 0.05).round() as usize {
+            *t += 0.05;
+            frame = effect(*t);
+        }
+        frame
+    }
+
+    #[test]
+    fn drop_flashes_when_the_music_comes_back_after_a_lull() {
+        let (clock, now) = manual_clock();
+        let source = AudioSource::new(clock);
+        let loud = Levels { bass: 1.0, ..Levels::default() };
+        let green = Color::rgb(0, 255, 0);
+        let mut effect = music_drop(source.clone(), green, 0.4, 3.0, 0.0, 0.5).unwrap();
+        let mut t = 0.0;
+        source.publish(loud, 0.0);
+        advance(&mut effect, &mut t, 20.0); // steady loud music
+        set(&now, t);
+        source.publish(loud, 10.0); // a beat
+        t += 0.05;
+        assert!(effect(t).g < 255); // no drop in steady music
+        set(&now, t);
+        source.publish(Levels::default(), 0.0);
+        let quiet = advance(&mut effect, &mut t, 8.0);
+        assert!(0 < quiet.g && quiet.g < 100); // a dim glow in the lull
+        t += 0.05;
+        set(&now, t);
+        source.publish(loud, 10.0);
+        let began = t;
+        assert_eq!(effect(t), green); // the drop: flash on
+        assert_eq!(effect(began + 0.07), OFF); // and off, at 8 Hz
+        assert!(effect(began + 0.5).g < 255);
+    }
+
+    #[test]
+    fn drop_ignores_music_that_comes_back_gently() {
+        let (clock, now) = manual_clock();
+        let source = AudioSource::new(clock);
+        let loud = Levels { bass: 1.0, ..Levels::default() };
+        let mut effect = music_drop(source.clone(), Color::rgb(0, 255, 0), 0.4, 3.0, 0.0, 0.5).unwrap();
+        let mut t = 0.0;
+        source.publish(loud, 0.0);
+        advance(&mut effect, &mut t, 20.0);
+        source.publish(Levels::default(), 0.0);
+        advance(&mut effect, &mut t, 8.0); // a lull
+        source.publish(Levels { bass: 0.3, ..Levels::default() }, 0.0);
+        advance(&mut effect, &mut t, 45.0); // back, but quietly: the lull is forgotten after 30 s
+        t += 0.05;
+        set(&now, t);
+        source.publish(loud, 10.0);
+        assert!(effect(t).g < 255); // an ordinary beat much later is not a drop
+    }
+
+    #[test]
+    fn drop_still_flashes_after_a_build_up() {
+        let (clock, now) = manual_clock();
+        let source = AudioSource::new(clock);
+        let loud = Levels { bass: 1.0, ..Levels::default() };
+        let green = Color::rgb(0, 255, 0);
+        let mut effect = music_drop(source.clone(), green, 0.4, 3.0, 0.0, 0.5).unwrap();
+        let mut t = 0.0;
+        source.publish(loud, 0.0);
+        advance(&mut effect, &mut t, 20.0);
+        source.publish(Levels::default(), 0.0);
+        advance(&mut effect, &mut t, 8.0); // a lull
+        source.publish(Levels { bass: 0.5, ..Levels::default() }, 0.0);
+        advance(&mut effect, &mut t, 12.0); // building back up, no beats
+        t += 0.05;
+        set(&now, t);
+        source.publish(loud, 10.0);
+        assert_eq!(effect(t), green); // the lull is still remembered: this is the drop
+    }
+
+    #[test]
+    fn drop_goes_dark_in_long_silence() {
+        let (clock, _) = manual_clock();
+        let source = AudioSource::new(clock);
+        let mut effect = music_drop(source.clone(), Color::rgb(0, 255, 0), 0.4, 3.0, 0.0, 0.5).unwrap();
+        let mut t = 0.0;
+        source.publish(Levels { bass: 1.0, ..Levels::default() }, 0.0);
+        advance(&mut effect, &mut t, 20.0);
+        source.publish(Levels::default(), 0.0);
+        assert_eq!(advance(&mut effect, &mut t, 120.0), OFF);
+    }
+
+    #[test]
+    fn drop_refuses_what_does_not_fit() {
+        let (clock, _) = manual_clock();
+        let source = AudioSource::new(clock);
+        for (flash, build, delay, sensitivity) in
+            [(0.0, 3.0, 0.0, 0.5), (0.4, 0.0, 0.0, 0.5), (0.4, 3.0, 5.0, 0.5), (0.4, 3.0, 0.0, 2.0)]
+        {
+            assert!(music_drop(source.clone(), WHITE, flash, build, delay, sensitivity).is_err());
+        }
+    }
+
+    #[test]
+    fn ambient_breathes_and_never_goes_dark() {
+        let (clock, now) = manual_clock();
+        let source = AudioSource::new(clock);
+        let mut effect = music_ambient(source.clone(), Color::rgb(200, 0, 0), BLUE, 6.0, 5.0, 0.0, 0.5).unwrap();
+        assert_eq!(effect(0.0), Color::rgb(50, 0, 0)); // never beat and silent: 200 * 0.25
+        assert_eq!(effect(3.0), Color::rgb(100, 0, 0)); // half way through the swell
+        set(&now, 10.0);
+        source.publish(Levels::default(), 10.0);
+        assert_eq!(effect(3.0), BLUE); // a beat shows the accent
+        set(&now, 20.0);
+        assert_eq!(effect(3.0), Color::rgb(100, 0, 0)); // and the breathing is back
+    }
+
+    #[test]
+    fn ambient_refuses_what_does_not_fit() {
+        let (clock, _) = manual_clock();
+        let source = AudioSource::new(clock);
+        for (period, decay, delay, sensitivity) in
+            [(0.0, 5.0, 0.0, 0.5), (6.0, 0.0, 0.0, 0.5), (6.0, 5.0, 5.0, 0.5), (6.0, 5.0, 0.0, 2.0)]
+        {
+            assert!(music_ambient(source.clone(), WARM, WHITE, period, decay, delay, sensitivity).is_err());
+        }
     }
 }

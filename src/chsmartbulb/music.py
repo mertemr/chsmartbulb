@@ -25,7 +25,8 @@ from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
-from .color import BLUE, OFF, RED, Color
+from .color import BLUE, OFF, RED, WHITE, Color
+from .effects import WARM
 from .errors import SmartBulbError
 
 if TYPE_CHECKING:
@@ -50,6 +51,18 @@ _ROOM_DOUBLING = 30.0  # seconds for the estimate of that noise to double while 
 _BEAT_GAP = 0.15  # seconds; caps detection at 400 bpm
 _BEAT_FLOOR = 0.05  # a beat needs the bass above this fraction of its recent peak
 _ONSET_CAP = 100.0
+_TEMPO_SLOW = Color(r=255, g=60)
+_TEMPO_FAST = Color(g=160, b=255)
+_TEMPO_INTERVALS = (0.25, 1.5)  # seconds between beats that count as a tempo, 240 to 40 bpm
+_TEMPO_BLEND = 0.3  # share of a new interval in the estimate
+_TEMPO_RELEASE = 3.0  # brightness falls this much per second
+_DROP_SLOW = 8.0  # seconds; the long average the lull is measured against
+_LULL_RATIO = 0.35  # a lull: the short average under this share of the long one
+_LULL_FLOOR = 0.05  # and the long one above this, so there was something to fall from
+_LULL_HOLD = 0.5  # seconds a lull must last
+_LULL_MEMORY = 30.0  # seconds `lulled` is remembered once the lull is over
+_DROP_ENERGY = 0.6  # a drop's beat must be this loud
+_FLASH_HZ = 8.0
 _PAN_SMOOTHING = 0.15  # seconds for the stereo position to settle
 _DARK = 1 / 255
 MAX_DELAY = 2.0
@@ -500,6 +513,12 @@ def _set_delay(source: AudioSource, delay: float) -> None:
     source.delay = delay
 
 
+def _check_sensitivity(source: AudioSource, sensitivity: float) -> None:
+    if not 0.0 <= sensitivity <= 1.0:
+        raise ValueError("sensitivity must be within 0..1")
+    source.sensitivity = sensitivity
+
+
 def _loudness(levels: Levels) -> float:
     return max(levels.bass, levels.mid, levels.treble)
 
@@ -518,9 +537,7 @@ def music_pulse(
     sets how easily a rise in the bass counts as a beat.
     """
     _set_delay(source, delay)
-    if not 0.0 <= sensitivity <= 1.0:
-        raise ValueError("sensitivity must be within 0..1")
-    source.sensitivity = sensitivity
+    _check_sensitivity(source, sensitivity)
 
     def effect(t: float) -> Color:
         flash = math.exp(-decay * (source.clock() - source.last_beat))
@@ -529,6 +546,225 @@ def music_pulse(
             return OFF  # scaled() never rounds a lit channel to zero, silence should be dark
         base = color if color is not None else Color.from_hsv(source.beats * 47.0)
         return base.scaled(level)
+
+    return effect
+
+
+def music_beathue(
+    source: AudioSource,
+    step: float = 47.0,
+    decay: float = 5.0,
+    floor: float = 0.1,
+    saturation: float = 1.0,
+    delay: float = 0.0,
+    sensitivity: float = DEFAULT_SENSITIVITY,
+) -> Effect:
+    """Turn the colour by ``step`` degrees on every beat; flash and glow with the bass.
+
+    Between beats the light falls to ``floor`` (0..1) of its brightness, never fully dark.
+    """
+    if not 1.0 <= step <= 180.0:
+        raise ValueError("step must be within 1..180 degrees")
+    if decay <= 0.0:
+        raise ValueError("decay must be positive")
+    if not 0.0 <= floor <= 1.0:
+        raise ValueError("floor must be within 0..1")
+    if not 0.0 <= saturation <= 1.0:
+        raise ValueError("saturation must be within 0..1")
+    _set_delay(source, delay)
+    _check_sensitivity(source, sensitivity)
+
+    def effect(t: float) -> Color:
+        flash = math.exp(-decay * (source.clock() - source.last_beat))
+        level = floor + (1.0 - floor) * max(flash, 0.6 * source.levels.bass)
+        if level < _DARK:
+            return OFF
+        return Color.from_hsv(source.beats * step, saturation).scaled(level)
+
+    return effect
+
+
+def music_tempo(
+    source: AudioSource,
+    slow: float = 80.0,
+    fast: float = 160.0,
+    smoothing: float = 2.0,
+    delay: float = 0.0,
+    sensitivity: float = DEFAULT_SENSITIVITY,
+) -> Effect:
+    """Warm for slow music, cool for fast; brightness follows the loudness.
+
+    The tempo is estimated from the gaps between beats. ``slow`` and ``fast`` (bpm) are the
+    tempos shown as the warm and the cool end, ``smoothing`` the seconds the colour takes to settle.
+    """
+    if slow >= fast:
+        raise ValueError("slow must be below fast")
+    if smoothing < 0.0:
+        raise ValueError("smoothing must not be negative")
+    _set_delay(source, delay)
+    _check_sensitivity(source, sensitivity)
+    estimate: float | None = None  # seconds between beats
+    previous: float | None = None
+    seen = source.beats
+    position = 0.5
+    shown = 0.0
+    last = 0.0
+
+    def effect(t: float) -> Color:
+        nonlocal estimate, previous, seen, position, shown, last
+        step = max(0.0, t - last)
+        last = t
+        if source.beats != seen:
+            risen = source.beats - seen
+            seen = source.beats
+            if risen > 0 and previous is not None:
+                interval = (source.last_beat - previous) / risen
+                if _TEMPO_INTERVALS[0] <= interval <= _TEMPO_INTERVALS[1]:
+                    estimate = (
+                        interval
+                        if estimate is None
+                        else (1.0 - _TEMPO_BLEND) * estimate + _TEMPO_BLEND * interval
+                    )
+            previous = source.last_beat
+        target = 0.5 if estimate is None else min(1.0, max(0.0, (60.0 / estimate - slow) / (fast - slow)))
+        if smoothing > 0.0:
+            position += (target - position) * (1.0 - math.exp(-step / smoothing))
+        else:
+            position = target
+        shown = max(_loudness(source.levels), shown - _TEMPO_RELEASE * step)
+        level = shown * shown
+        if level < _DARK:
+            return OFF
+        return _TEMPO_SLOW.mix(_TEMPO_FAST, position).scaled(level)
+
+    return effect
+
+
+def music_centroid(
+    source: AudioSource,
+    low: Color = RED,
+    high: Color = BLUE,
+    width: float = 2.0,
+    release: float = 3.0,
+    delay: float = 0.0,
+) -> Effect:
+    """Blend between two colours by where the sound's weight lies between bass and treble.
+
+    Bass-heavy sound shows ``low``, bright sound ``high``. The weight of real music seldom passes
+    the middle, so ``width`` stretches it. Brightness follows the loudness.
+    """
+    if width <= 0.0:
+        raise ValueError("width must be positive")
+    _set_delay(source, delay)
+    shown = 0.0
+    position = 0.0
+    last = 0.0
+
+    def effect(t: float) -> Color:
+        nonlocal shown, position, last
+        step = max(0.0, t - last)
+        last = t
+        levels = source.levels
+        total = levels.bass + levels.mid + levels.treble
+        faded = max(0.0, shown - release * step)
+        if total > 0.0:  # silence says nothing about the weight, keep the last one
+            target = min(1.0, max(0.0, width * (0.5 * levels.mid + levels.treble) / total))
+            if faded * faded < _DARK:
+                position = target
+            else:
+                position += (target - position) * (1.0 - math.exp(-step / _PAN_SMOOTHING))
+        shown = max(_loudness(levels), faded)
+        level = shown * shown
+        return low.mix(high, position).scaled(level) if level >= _DARK else OFF
+
+    return effect
+
+
+def music_drop(
+    source: AudioSource,
+    color: Color = WHITE,
+    flash: float = 0.4,
+    build: float = 3.0,
+    delay: float = 0.0,
+    sensitivity: float = DEFAULT_SENSITIVITY,
+) -> Effect:
+    """Open up as the music builds and flash when it comes back in after a lull.
+
+    ``build`` is the seconds the light takes to follow the energy, ``flash`` how long the flash lasts.
+    The thresholds are tuned on synthetic music, not on real tracks.
+    """
+    if flash <= 0.0:
+        raise ValueError("flash must be positive")
+    if build <= 0.0:
+        raise ValueError("build must be positive")
+    _set_delay(source, delay)
+    _check_sensitivity(source, sensitivity)
+    fast = 0.0
+    slow = 0.0
+    lull = 0.0
+    since = 0.0
+    lulled = False
+    seen = source.beats
+    began = -math.inf
+    last = 0.0
+
+    def effect(t: float) -> Color:
+        nonlocal fast, slow, lull, since, lulled, seen, began, last
+        step = max(0.0, t - last)
+        last = t
+        energy = _loudness(source.levels)
+        fast += (energy - fast) * (1.0 - math.exp(-step / build))
+        slow += (energy - slow) * (1.0 - math.exp(-step / _DROP_SLOW))
+        if slow > _LULL_FLOOR and fast < _LULL_RATIO * slow:
+            lull += step
+            since = 0.0
+            if lull >= _LULL_HOLD:
+                lulled = True
+        else:
+            lull = 0.0
+            if lulled:
+                since += step
+                if since >= _LULL_MEMORY:  # the lull is long forgotten: a beat now is not a drop
+                    lulled = False
+                    since = 0.0
+        arrived = source.beats != seen
+        seen = source.beats
+        if arrived and lulled and energy >= _DROP_ENERGY:
+            lulled = False
+            since = 0.0
+            began = t
+        if t - began < flash:
+            return color if ((t - began) * _FLASH_HZ) % 1.0 < 0.5 else OFF
+        glow = 0.15 * min(1.0, slow / _LULL_FLOOR) + 0.6 * fast
+        return color.scaled(glow) if glow >= _DARK else OFF
+
+    return effect
+
+
+def music_ambient(
+    source: AudioSource,
+    base: Color = WARM,
+    accent: Color = WHITE,
+    period: float = 6.0,
+    decay: float = 5.0,
+    delay: float = 0.0,
+    sensitivity: float = DEFAULT_SENSITIVITY,
+) -> Effect:
+    """A calm colour that breathes every ``period`` seconds, with ``accent`` flashing on the beats.
+
+    Never dark: in silence it is only the breathing.
+    """
+    if period <= 0.0:
+        raise ValueError("period must be positive")
+    if decay <= 0.0:
+        raise ValueError("decay must be positive")
+    _set_delay(source, delay)
+    _check_sensitivity(source, sensitivity)
+
+    def effect(t: float) -> Color:
+        swell = 0.5 - 0.5 * math.cos(2.0 * math.pi * t / period)
+        flash = math.exp(-decay * (source.clock() - source.last_beat))
+        return base.scaled(0.25 + 0.25 * swell).mix(accent, flash)
 
     return effect
 

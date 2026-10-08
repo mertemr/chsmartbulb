@@ -2,6 +2,7 @@
   "name": "chsmartbulb-app",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@12.8.1",
   "scripts": {
     "tauri": "tauri"
   },

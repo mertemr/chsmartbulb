@@ -9,7 +9,7 @@ use std::sync::Arc;
 use serde_json::{json, Map, Value};
 
 use crate::audio::{self, AudioSource, DEFAULT_SENSITIVITY, MAX_DELAY};
-use crate::color::{parse_color, Color, BLUE, GREEN, RED};
+use crate::color::{parse_color, Color, BLUE, GREEN, RED, WHITE};
 use crate::effects::{self, Effect, EASINGS, MAX_STEPS, WARM};
 use crate::error::{invalid, Result};
 use crate::screen::{self, ScreenSource};
@@ -85,6 +85,10 @@ fn range(key: &str) -> (f64, f64, f64) {
         "width" => (1.0, 10.0, 0.5),
         "smoothing" => (0.0, 2.0, 0.05),
         "speed" => (0.1, 5.0, 0.1),
+        "step" => (1.0, 180.0, 1.0),
+        "slow" | "fast" => (40.0, 240.0, 1.0),
+        "flash" => (0.1, 2.0, 0.05),
+        "build" => (0.5, 10.0, 0.5),
         _ => (0.0, 1.0, 0.01),
     }
 }
@@ -268,6 +272,135 @@ pub static CATALOG: &[EffectInfo] = &[
         ranges: &[],
     },
     EffectInfo {
+        name: "beathue",
+        summary: "the colour turns on every beat, the brightness follows the bass",
+        needs: Some(Needs::Audio),
+        defaults: || {
+            vec![
+                ("step", Param::Number(47.0)),
+                ("decay", Param::Number(5.0)),
+                ("floor", Param::Number(0.1)),
+                ("saturation", Param::Number(1.0)),
+                ("delay", Param::Number(0.0)),
+                ("sensitivity", Param::Number(DEFAULT_SENSITIVITY)),
+            ]
+        },
+        build: |p, s| {
+            audio::music_beathue(
+                audio(s, "beathue")?,
+                n(p, "step"),
+                n(p, "decay"),
+                n(p, "floor"),
+                n(p, "saturation"),
+                n(p, "delay"),
+                n(p, "sensitivity"),
+            )
+        },
+        ranges: &[],
+    },
+    EffectInfo {
+        name: "tempo",
+        summary: "warm for slow music, cool for fast, by the gaps between beats",
+        needs: Some(Needs::Audio),
+        defaults: || {
+            vec![
+                ("slow", Param::Number(80.0)),
+                ("fast", Param::Number(160.0)),
+                ("smoothing", Param::Number(2.0)),
+                ("delay", Param::Number(0.0)),
+                ("sensitivity", Param::Number(DEFAULT_SENSITIVITY)),
+            ]
+        },
+        build: |p, s| {
+            audio::music_tempo(
+                audio(s, "tempo")?,
+                n(p, "slow"),
+                n(p, "fast"),
+                n(p, "smoothing"),
+                n(p, "delay"),
+                n(p, "sensitivity"),
+            )
+        },
+        ranges: &[],
+    },
+    EffectInfo {
+        name: "centroid",
+        summary: "blend two colours by whether the sound is bass-heavy or bright",
+        needs: Some(Needs::Audio),
+        defaults: || {
+            vec![
+                ("low", Param::Color(Some(RED))),
+                ("high", Param::Color(Some(BLUE))),
+                ("width", Param::Number(2.0)),
+                ("release", Param::Number(3.0)),
+                ("delay", Param::Number(0.0)),
+            ]
+        },
+        build: |p, s| {
+            audio::music_centroid(
+                audio(s, "centroid")?,
+                colour(p, "low"),
+                colour(p, "high"),
+                n(p, "width"),
+                n(p, "release"),
+                n(p, "delay"),
+            )
+        },
+        ranges: &[],
+    },
+    EffectInfo {
+        name: "drop",
+        summary: "opens up as the music builds, flashes when it drops back in",
+        needs: Some(Needs::Audio),
+        defaults: || {
+            vec![
+                ("color", Param::Color(Some(WHITE))),
+                ("flash", Param::Number(0.4)),
+                ("build", Param::Number(3.0)),
+                ("delay", Param::Number(0.0)),
+                ("sensitivity", Param::Number(DEFAULT_SENSITIVITY)),
+            ]
+        },
+        build: |p, s| {
+            audio::music_drop(
+                audio(s, "drop")?,
+                colour(p, "color"),
+                n(p, "flash"),
+                n(p, "build"),
+                n(p, "delay"),
+                n(p, "sensitivity"),
+            )
+        },
+        ranges: &[],
+    },
+    EffectInfo {
+        name: "ambient",
+        summary: "a calm colour that breathes, an accent on the beats; never dark",
+        needs: Some(Needs::Audio),
+        defaults: || {
+            vec![
+                ("base", Param::Color(Some(WARM))),
+                ("accent", Param::Color(Some(WHITE))),
+                ("period", Param::Number(6.0)),
+                ("decay", Param::Number(5.0)),
+                ("delay", Param::Number(0.0)),
+                ("sensitivity", Param::Number(DEFAULT_SENSITIVITY)),
+            ]
+        },
+        build: |p, s| {
+            audio::music_ambient(
+                audio(s, "ambient")?,
+                colour(p, "base"),
+                colour(p, "accent"),
+                n(p, "period"),
+                n(p, "decay"),
+                n(p, "delay"),
+                n(p, "sensitivity"),
+            )
+        },
+        ranges: &[],
+    },
+    EffectInfo {
         name: "screen",
         summary: "follow the colour of the screen",
         needs: Some(Needs::Screen),
@@ -344,7 +477,13 @@ fn coerce(key: &str, default: &Param, value: &Value) -> Result<Param> {
                 Value::String(text) => text.trim().parse::<f64>().ok(),
                 _ => None,
             };
-            number.map(Param::Number).ok_or_else(|| invalid(format!("{key} must be a number, got {value}")))
+            match number {
+                Some(number) if !number.is_finite() => {
+                    Err(invalid(format!("{key} must be a finite number, got {value}")))
+                }
+                Some(number) => Ok(Param::Number(number)),
+                None => Err(invalid(format!("{key} must be a number, got {value}"))),
+            }
         }
     }
 }
@@ -441,6 +580,15 @@ mod tests {
     }
 
     #[test]
+    fn numbers_must_be_finite() {
+        for bad in ["inf", "nan", "-inf"] {
+            assert!(resolve("beathue", Some(&params(json!({"decay": bad})))).is_err());
+        }
+        let resolved = resolve("beathue", Some(&params(json!({"decay": "2.5"})))).unwrap();
+        assert_eq!(resolved["decay"], Param::Number(2.5));
+    }
+
+    #[test]
     fn music_needs_a_source() {
         assert!(create("music", None, &Sources::default()).is_err());
         let sources = Sources { audio: Some(AudioSource::new(audio::monotonic())), screen: None };
@@ -452,12 +600,28 @@ mod tests {
     fn describe_matches_the_python_shape() {
         let described = describe();
         let all = described.as_array().unwrap();
-        assert_eq!(all.len(), 13);
+        assert_eq!(all.len(), 18);
+        let names: Vec<&str> = all.iter().map(|e| e["name"].as_str().unwrap()).collect();
+        assert_eq!(
+            names,
+            [
+                "breathe", "hue", "pulse", "strobe", "candle", "palette", "police", "custom", "music", "spectrum",
+                "volume", "stereo", "beathue", "tempo", "centroid", "drop", "ambient", "screen"
+            ]
+        );
+        let range = |key: &str| all.iter().find_map(|e| e["schema"].get(key)).unwrap().clone();
+        assert_eq!(range("slow"), json!({"type": "number", "min": 40.0, "max": 240.0, "step": 1.0}));
+        assert_eq!(range("fast"), json!({"type": "number", "min": 40.0, "max": 240.0, "step": 1.0}));
+        assert_eq!(range("flash"), json!({"type": "number", "min": 0.1, "max": 2.0, "step": 0.05}));
+        assert_eq!(range("build"), json!({"type": "number", "min": 0.5, "max": 10.0, "step": 0.5}));
         let music = all.iter().find(|e| e["name"] == "music").unwrap();
         assert_eq!(music["needs"], "audio");
         assert_eq!(music["params"]["color"], Value::Null);
         assert_eq!(music["schema"]["color"], json!({"type": "color", "optional": true}));
         assert_eq!(music["schema"]["delay"], json!({"type": "number", "min": 0.0, "max": 2.0, "step": 0.01}));
+        let beathue = all.iter().find(|e| e["name"] == "beathue").unwrap();
+        assert_eq!(beathue["needs"], "audio");
+        assert_eq!(beathue["schema"]["step"], json!({"type": "number", "min": 1.0, "max": 180.0, "step": 1.0}));
         let screen = all.iter().find(|e| e["name"] == "screen").unwrap();
         assert_eq!(screen["schema"]["saturation"]["max"], 3.0);
         let custom = all.iter().find(|e| e["name"] == "custom").unwrap();

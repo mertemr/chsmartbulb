@@ -106,14 +106,14 @@ signed with a key from the repository's secrets (`ANDROID_KEYSTORE`, base64, and
 `ANDROID_KEYSTORE_PASSWORD`) updates in place; without them each run signs with a new key, so
 an installed build has to be removed before installing a newer one.
 
-Locally, with Rust and Node 22:
+Locally, with Rust and Node 22 and pnpm:
 
 ```bash
-npm ci --prefix web
-npm ci --prefix app
+pnpm --dir web install --frozen-lockfile
+pnpm --dir app install --frozen-lockfile
 cd app
-npx tauri dev            # desktop, with hot reload
-npx tauri build          # desktop bundles in target/release/bundle
+pnpm tauri dev            # desktop, with hot reload
+pnpm tauri build          # desktop bundles in target/release/bundle
 ```
 
 The Linux build needs WebKitGTK 4.1, e.g. on Arch
@@ -126,10 +126,10 @@ x86_64-linux-android i686-linux-android`):
 
 ```bash
 cd app
-npx tauri android init   # generates src-tauri/gen/android, not kept in the repository
-npx tauri icon icon.svg
-npx tauri android dev    # on a connected phone
-npx tauri android build --apk
+pnpm tauri android init   # generates src-tauri/gen/android, not kept in the repository
+pnpm tauri icon icon.svg
+pnpm tauri android dev    # on a connected phone
+pnpm tauri android build --apk
 ```
 
 The Kotlin side is in [`app/plugin/android`](../app/plugin/android); its manifest brings the
