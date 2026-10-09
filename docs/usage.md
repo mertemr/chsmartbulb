@@ -44,6 +44,27 @@ The service keeps the connection open, runs effects in the background and rememb
 state (colour, brightness, on/off, effect). While it runs, the other commands talk to it instead
 of the bulb, which makes them fast and lets `effect` return immediately.
 
+`chsmartbulbd` is the same service as one Rust program, with no Python or numpy to install:
+
+```bash
+cargo build --release -p chsmartbulb-daemon      # target/release/chsmartbulbd
+chsmartbulbd --address AA:BB:CC:DD:EE:FF --listen 8377 --web 8378 --token SECRET
+```
+
+It takes the daemon's options (`--address`, `--transport`, `--channel`, `--socket`, `--listen`,
+`--web`, `--token`, `--no-token`, `--fps`, `--no-state`, `--mic`, `--audio-device`, `--monitor`,
+`--on-lock`, `--on-sleep`), uses the same socket and state file, and the commands above talk to
+it as they do to `chsmartbulb daemon`; `chsmartbulbd --help` lists them. There is no
+`--audio-backend`: Linux captures with `parec`, Windows through WASAPI. It follows its own screen
+on Windows and on an X11 desktop (`--monitor`). In a Wayland session nobody may read the picture
+unasked, so the service has the desktop share a screen, as screen sharing in a call does: the
+first `screen` effect brings up the desktop's question about which screen, the answer is
+remembered, and `--choose-screen` makes it ask again. That part needs the PipeWire headers and
+libclang to build (`libpipewire-0.3-dev libclang-dev` on Debian and Ubuntu, `pipewire clang` on
+Arch); `--no-default-features` builds without it. `--on-lock` and `--on-sleep` work
+on Linux (through logind) as well as on Windows. `--simulate` serves a simulated bulb for trying
+things without one.
+
 - If the bulb loses power or goes out of range, the service keeps retrying and puts the
   remembered state back when the bulb returns. Requests made in the meantime are applied then.
 - The state is stored in `$XDG_STATE_HOME/chsmartbulb/state.json` and restored on start

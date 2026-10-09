@@ -1,30 +1,21 @@
-//! Linux and Windows: BLE through btleplug, SPP through an RFCOMM socket.
+//! Linux and Windows, through `chsmartbulb-desktop`: BLE through btleplug, SPP through an RFCOMM socket.
 
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 
-use btleplug::api::{Central, Manager as _, Peripheral as _, ScanFilter};
-use btleplug::platform::{Adapter, Manager};
+use btleplug::api::{Central, Peripheral as _, ScanFilter};
 use chsmartbulb_core::service::AudioCapture;
 use chsmartbulb_core::{Bearer, Connector};
 use serde::de::DeserializeOwned;
 use tauri::plugin::PluginApi;
 use tauri::{AppHandle, Runtime};
 
-pub use presence::Watcher as PresenceWatcher;
+pub use chsmartbulb_desktop::presence::Watcher as PresenceWatcher;
+use chsmartbulb_desktop::{adapter, presence};
 
 use crate::models::{likely, AudioInput, AudioRoute, Found, Presence, Readiness};
 use crate::{Error, Result};
-
-#[cfg(any(target_os = "linux", windows))]
-mod audio;
-mod ble;
-mod presence;
-#[cfg(target_os = "linux")]
-mod rfcomm_linux;
-#[cfg(windows)]
-mod rfcomm_windows;
 
 pub fn init<R: Runtime, C: DeserializeOwned>(
     _app: &AppHandle<R>,
@@ -35,12 +26,6 @@ pub fn init<R: Runtime, C: DeserializeOwned>(
 
 pub struct Bluetooth<R: Runtime> {
     runtime: PhantomData<fn() -> R>,
-}
-
-pub(crate) async fn adapter() -> Result<Adapter> {
-    let manager = Manager::new().await.map_err(|e| Error::Bluetooth(format!("no Bluetooth here: {e}")))?;
-    let adapters = manager.adapters().await.map_err(|e| Error::Bluetooth(e.to_string()))?;
-    adapters.into_iter().next().ok_or_else(|| Error::Bluetooth("no Bluetooth adapter found".into()))
 }
 
 impl<R: Runtime> Bluetooth<R> {
@@ -77,35 +62,21 @@ impl<R: Runtime> Bluetooth<R> {
     }
 
     pub fn connector(&self, address: &str, bearer: Bearer) -> Result<Arc<dyn Connector>> {
-        match bearer {
-            Bearer::Ble => Ok(Arc::new(ble::BleConnector::new(address))),
-            #[cfg(target_os = "linux")]
-            Bearer::Spp => Ok(Arc::new(rfcomm_linux::RfcommConnector::new(address)?)),
-            #[cfg(windows)]
-            Bearer::Spp => Ok(Arc::new(rfcomm_windows::RfcommConnector::new(address)?)),
-            #[cfg(not(any(target_os = "linux", windows)))]
-            Bearer::Spp => Err(Error::Unsupported("SPP is not available on this platform; use BLE".into())),
-        }
+        Ok(chsmartbulb_desktop::connector(address, bearer)?)
     }
 
     /// What this computer plays (a loopback of the default output) or its default input.
     pub fn audio_capture(&self, input: AudioInput) -> Option<Arc<dyn AudioCapture>> {
-        #[cfg(any(target_os = "linux", windows))]
-        return Some(Arc::new(audio::DesktopAudio::new(input)));
-        #[cfg(not(any(target_os = "linux", windows)))]
-        {
-            let _ = input;
-            None
-        }
+        chsmartbulb_desktop::audio_capture(input == AudioInput::Microphone, None)
     }
 
     pub async fn audio_route(&self) -> Result<AudioRoute> {
-        Ok(AudioRoute { can_capture_playback: cfg!(any(target_os = "linux", windows)), ..AudioRoute::default() })
+        Ok(AudioRoute { can_capture_playback: chsmartbulb_desktop::CAN_CAPTURE_PLAYBACK, ..AudioRoute::default() })
     }
 
     /// Report the computer being locked, put to sleep or shut down, until the watcher is dropped.
     pub async fn watch_presence(&self, on_event: Arc<dyn Fn(Presence) + Send + Sync>) -> Result<PresenceWatcher> {
-        presence::watch(on_event).await
+        Ok(presence::watch(on_event).await?)
     }
 
     /// Desktop apps keep running in the background anyway.

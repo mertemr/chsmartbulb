@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use crate::models::Presence;
+use chsmartbulb_core::service::Presence;
 
 type Callback = Arc<dyn Fn(Presence) + Send + Sync>;
 
@@ -51,8 +51,8 @@ mod linux {
     use zbus::zvariant::OwnedObjectPath;
 
     use super::Callback;
-    use crate::models::Presence;
     use crate::{Error, Result};
+    use chsmartbulb_core::service::Presence;
 
     #[zbus::proxy(
         interface = "org.freedesktop.login1.Manager",
@@ -139,8 +139,8 @@ mod windows {
     };
 
     use super::Callback;
-    use crate::models::Presence;
     use crate::{Error, Result};
+    use chsmartbulb_core::service::Presence;
 
     const WTS_SESSION_LOCK: usize = 7;
     const WTS_SESSION_UNLOCK: usize = 8;

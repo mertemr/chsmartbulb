@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/python", "app/plugin", "app/src-tauri"]
+members = ["crates/core", "crates/desktop", "crates/daemon", "crates/python", "app/plugin", "app/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,6 +11,7 @@ repository = "https://github.com/mertemr/chsmartbulb"
 
 [workspace.dependencies]
 chsmartbulb-core = { path = "crates/core" }
+chsmartbulb-desktop = { path = "crates/desktop", default-features = false }
 async-trait = "0.1"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
