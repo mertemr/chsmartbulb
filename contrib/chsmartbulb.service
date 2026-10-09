@@ -5,7 +5,8 @@ After=bluetooth.target pipewire-pulse.service
 [Service]
 Environment=CHSMARTBULB_ADDRESS=AA:BB:CC:DD:EE:FF
 # Path to the chsmartbulbd executable, for example target/release/chsmartbulbd of a checkout
-# (cargo build --release -p chsmartbulb-daemon). The Python service runs the same way:
+# (cargo build --release -p chsmartbulb-daemon). The Python service runs the same way, and
+# reads the address from ~/.config/chsmartbulb/config when it is not given here:
 # /path/to/chsmartbulb daemon
 ExecStart=/path/to/chsmartbulbd
 Restart=on-failure

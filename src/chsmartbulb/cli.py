@@ -10,12 +10,11 @@ import argparse
 import asyncio
 import functools
 import logging
-import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from . import catalog, client, effects, presence, service, web
+from . import catalog, client, config, effects, presence, service, web
 from . import protocol as p
 from .bulb import ChSmartBulb
 from .color import NAMED, Color, parse_color
@@ -24,8 +23,10 @@ from .music import BACKENDS, DEFAULT_DEVICE, MusicSource
 from .protocol import NativeEffect
 from .screen import PRIMARY, ScreenCapture
 
-ENV_ADDRESS = "CHSMARTBULB_ADDRESS"
-ENV_TOKEN = "CHSMARTBULB_TOKEN"
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+_TRANSPORTS = ("rfcomm", "ble")
 _DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 _AGENTS = ("audio-agent", "screen-agent")
 
@@ -140,7 +141,9 @@ def _print(command: str, reply: dict[str, Any]) -> None:
 
 def _bulb(args: argparse.Namespace, **options: Any) -> ChSmartBulb:
     if not args.address:
-        raise SmartBulbError(f"no address given: use --address or set ${ENV_ADDRESS}")
+        raise SmartBulbError(
+            f"no address given: use --address, set ${config.ADDRESS} or put it in {config.default_path()}"
+        )
     if args.transport == "ble":
         return ChSmartBulb.ble(args.address, **options)
     return ChSmartBulb.rfcomm(args.address, args.channel, **options)
@@ -168,7 +171,7 @@ def _remote(args: argparse.Namespace) -> client.Remote:
 async def _daemon(args: argparse.Namespace) -> None:
     for option in ("listen", "web"):
         if getattr(args, option) is not None and not (args.token or args.no_token):
-            raise SmartBulbError(f"--{option} needs a token: use --token, set ${ENV_TOKEN} or pass --no-token")
+            raise SmartBulbError(f"--{option} needs a token: use --token, set ${config.TOKEN} or pass --no-token")
     bulb = _bulb(args, auto_reconnect=False)
     state_path = None if args.no_state else service.default_state_path()
     looks = {
@@ -245,27 +248,50 @@ async def _run(args: argparse.Namespace) -> None:
     _print(args.command, reply)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="chsmartbulb", description="Control a CHSmartBulb / BL08A bulb.")
+def build_parser(settings: Mapping[str, str] | None = None) -> argparse.ArgumentParser:
+    """The parser, with ``settings`` (the settings file and the environment when left out) behind its options."""
+    settings = config.load() if settings is None else settings
+    parser = argparse.ArgumentParser(
+        prog="chsmartbulb",
+        description="Control a CHSmartBulb / BL08A bulb.",
+        epilog=f"Options that name a variable can be set once in {config.default_path()}, one NAME=VALUE a line.",
+    )
     parser.add_argument(
         "-a",
         "--address",
-        default=os.environ.get(ENV_ADDRESS),
-        help=f"Bluetooth address of the bulb (or set ${ENV_ADDRESS})",
+        default=settings.get(config.ADDRESS),
+        help=f"Bluetooth address of the bulb (or set ${config.ADDRESS})",
     )
-    parser.add_argument("-t", "--transport", choices=("rfcomm", "ble"), default="rfcomm")
+    transport = settings.get(config.TRANSPORT, "rfcomm")
+    if transport not in _TRANSPORTS:
+        parser.error(f"${config.TRANSPORT}: invalid choice: {transport!r} (choose from {', '.join(_TRANSPORTS)})")
+    parser.add_argument(
+        "-t",
+        "--transport",
+        choices=_TRANSPORTS,
+        default=transport,
+        help=f"how the bulb is reached (default rfcomm, or set ${config.TRANSPORT})",
+    )
     parser.add_argument("--channel", type=int, default=p.RFCOMM_CHANNEL, help="RFCOMM channel (default 2)")
     parser.add_argument("--socket", type=Path, default=service.default_socket_path(), help="service socket path")
     parser.add_argument("--direct", action="store_true", help="talk to the bulb even if a service is running")
-    parser.add_argument("--host", metavar="HOST[:PORT]", help="use the service on another machine")
     parser.add_argument(
-        "--token", default=os.environ.get(ENV_TOKEN), help=f"shared secret for network access (or set ${ENV_TOKEN})"
+        "--host",
+        default=settings.get(config.HOST),
+        metavar="HOST[:PORT]",
+        help=f"use the service on another machine (or set ${config.HOST})",
+    )
+    parser.add_argument(
+        "--token",
+        default=settings.get(config.TOKEN),
+        help=f"shared secret for network access (or set ${config.TOKEN})",
     )
     parser.add_argument(
         "--audio-device",
-        default=DEFAULT_DEVICE,
+        default=settings.get(config.AUDIO_DEVICE, DEFAULT_DEVICE),
         metavar="SOURCE",
-        help="audio source for sound-reactive effects (default: monitor of the default output)",
+        help="audio source for sound-reactive effects "
+        f"(default: monitor of the default output, or set ${config.AUDIO_DEVICE})",
     )
     parser.add_argument("--audio-backend", choices=BACKENDS, default="auto", help="how the audio is captured")
     parser.add_argument(
@@ -273,8 +299,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="listen to the microphone instead of what the computer plays (--audio-device then names an input)",
     )
+    monitor = settings.get(config.MONITOR, str(PRIMARY))
+    if not monitor.lstrip("-").isdigit():
+        parser.error(f"${config.MONITOR}: invalid int value: {monitor!r}")
     parser.add_argument(
-        "--monitor", type=int, default=PRIMARY, metavar="N", help="which monitor the screen effect follows; 0 is all"
+        "--monitor",
+        type=int,
+        default=int(monitor),
+        metavar="N",
+        help=f"which monitor the screen effect follows; 0 is all (or set ${config.MONITOR})",
     )
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -371,7 +404,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    try:
+        parser = build_parser()
+    except SmartBulbError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    args = parser.parse_args(argv)
     quiet = logging.INFO if args.command in ("daemon", *_AGENTS) else logging.WARNING
     logging.basicConfig(level=logging.DEBUG if args.verbose else quiet, format="%(levelname)s %(message)s")
     try:

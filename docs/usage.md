@@ -2,11 +2,27 @@
 
 ## Command line
 
-Pass the bulb's address with `--address` or set it once:
+Pass the bulb's address with `--address`, or write it down once in the settings file:
+`~/.config/chsmartbulb/config` on Linux, `%APPDATA%\chsmartbulb\config` on Windows.
 
 ```bash
-export CHSMARTBULB_ADDRESS=AA:BB:CC:DD:EE:FF
+# the bulb in the study
+CHSMARTBULB_ADDRESS=AA:BB:CC:DD:EE:FF
 ```
+
+| Setting | Stands in for |
+|---|---|
+| `CHSMARTBULB_ADDRESS` | `--address` |
+| `CHSMARTBULB_TOKEN` | `--token` |
+| `CHSMARTBULB_HOST` | `--host` |
+| `CHSMARTBULB_TRANSPORT` | `--transport` |
+| `CHSMARTBULB_AUDIO_DEVICE` | `--audio-device` |
+| `CHSMARTBULB_MONITOR` | `--monitor` |
+
+Each line is `NAME=VALUE`; a line starting with `#` is a comment, and a value may be quoted. An
+environment variable of the same name overrides the file, and the option on the command line
+overrides both. A line that sets none of these is reported rather than skipped. The file may hold
+the token, so keep it readable by you alone.
 
 | Command | Does |
 |---|---|
@@ -73,7 +89,8 @@ things without one.
   command bypass the service, which only works when the service is not holding the connection.
 
 To start it with your session, copy [`contrib/chsmartbulb.service`](../contrib/chsmartbulb.service)
-to `~/.config/systemd/user/`, fill in the address and the path, then:
+to `~/.config/systemd/user/`, fill in the address and the path (`chsmartbulb daemon` takes the
+address from the settings file instead; `chsmartbulbd` does not read that file), then:
 
 ```bash
 systemctl --user enable --now chsmartbulb
@@ -156,8 +173,8 @@ make it, the plan is restored after waking all the same.
 chsmartbulb -t ble daemon --listen 8377 --web 0.0.0.0:8378 --on-lock dim --on-sleep off
 ```
 
-To start it when you log in, a scheduled task does (put the token in `$CHSMARTBULB_TOKEN` and the
-address in `$CHSMARTBULB_ADDRESS` as user variables rather than in the command):
+To start it when you log in, a scheduled task does (put the token and the address in the settings
+file rather than in the command):
 
 ```powershell
 schtasks /Create /TN chsmartbulb /SC ONLOGON /TR "C:\Tools\chsmartbulb.exe -t ble daemon --listen 8377 --web 0.0.0.0:8378 --on-lock dim --on-sleep off"

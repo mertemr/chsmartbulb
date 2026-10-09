@@ -63,7 +63,8 @@ for the BLE transport.
 ## Quick start
 
 ```bash
-export CHSMARTBULB_ADDRESS=AA:BB:CC:DD:EE:FF
+mkdir -p ~/.config/chsmartbulb
+echo CHSMARTBULB_ADDRESS=AA:BB:CC:DD:EE:FF > ~/.config/chsmartbulb/config
 uv run chsmartbulb color red
 uv run chsmartbulb rgb 0 80 255 --brightness 40 --fade
 uv run chsmartbulb effect hue --period 10
