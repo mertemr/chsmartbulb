@@ -1,9 +1,10 @@
 //! The service on the network, as `chsmartbulb daemon --listen PORT --web PORT` offers it.
 //!
-//! Two listeners, both speaking the socket protocol through a [`Session`]:
+//! The listeners all speak the socket protocol through a [`Session`]:
 //!
 //! - [`serve_lines`]: one JSON object per line over TCP, for the command line and the
 //!   audio and screen agents of other machines (usually port 8377);
+//! - [`serve_local`]: the same lines over a Unix socket, for this machine's command line;
 //! - [`serve_web`]: the web interface's files and the same objects over a WebSocket at
 //!   `/ws` (usually port 8378).
 //!
@@ -127,8 +128,18 @@ pub async fn serve_lines(service: Service, listener: TcpListener, token: Option<
     }
 }
 
-async fn lines(stream: TcpStream, mut session: Session) {
-    let (reader, mut writer) = stream.into_split();
+/// Accept this machine's clients of the line protocol, which need no token, until the task is dropped.
+#[cfg(unix)]
+pub async fn serve_local(service: Service, listener: tokio::net::UnixListener) {
+    loop {
+        let Ok((stream, _peer)) = listener.accept().await else { continue };
+        let session = Session::new(service.clone(), None);
+        tokio::spawn(lines(stream, session));
+    }
+}
+
+async fn lines(stream: impl AsyncRead + AsyncWrite + Unpin, mut session: Session) {
+    let (reader, mut writer) = tokio::io::split(stream);
     let mut reader = BufReader::new(reader);
     let mut line = String::new();
     loop {

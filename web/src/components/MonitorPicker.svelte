@@ -19,10 +19,31 @@
       : []
   })
 
+  // A Wayland desktop shares the screen its user picks in a window of its own, so there is nothing
+  // to list: the service can only be told to have it ask again.
+  const asks = $derived(Boolean(app.state?.localScreenAsks) && (app.state?.agents.screen ?? 0) === 0)
+
   async function choose(id: string, index: number) {
     await app.send({ cmd: 'monitor', agent: id, index })
   }
 </script>
+
+{#if asks}
+  <div class="grid gap-2">
+    <p class="text-muted text-xs">
+      The service’s computer shares the screen chosen on it. Choosing another opens its desktop’s question there.
+    </p>
+    <div>
+      <button
+        type="button"
+        class="border-line bg-card text-muted h-10 rounded-lg border px-3 text-sm font-medium transition active:scale-95"
+        onclick={() => choose('local', 0)}
+      >
+        Choose another screen
+      </button>
+    </div>
+  </div>
+{/if}
 
 {#each targets as target (target.id)}
   <div class="grid gap-2">

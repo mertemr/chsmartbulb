@@ -26,10 +26,6 @@ tokio.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "test-util", "net", "io-util", "macros"] }
 
-[[example]]
-name = "serve"
-required-features = ["server"]
-
 [[test]]
 name = "server"
 required-features = ["server"]

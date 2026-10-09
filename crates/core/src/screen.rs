@@ -15,6 +15,28 @@ const NEUTRAL: [f64; 3] = [0.48, 1.0, 0.23];
 /// How much more a fully saturated pixel counts than a grey one.
 const VIVID: f64 = 4.0;
 
+/// Captures per second.
+pub const RATE: f64 = 15.0;
+/// Monitors are numbered from 1; 0 is all of them together.
+pub const PRIMARY: i64 = 1;
+/// Pixels kept along the shorter side of a picture.
+pub const SAMPLES: u32 = 64;
+/// Frames without a change before a capture starts to slow down (about a second).
+pub const STILL_FRAMES: u32 = 15;
+/// At most this many frame times between two captures of a picture that stands still.
+pub const SLOWEST: u32 = 5;
+
+/// How many frame times to wait before the next capture, after `still` unchanged frames.
+pub fn pace(still: u32) -> u32 {
+    (1 + still / STILL_FRAMES).min(SLOWEST)
+}
+
+/// Whether two colours differ by no more than the noise of a compressed picture.
+pub fn similar(a: Color, b: Color) -> bool {
+    const TOLERANCE: u8 = 2;
+    a.r.abs_diff(b.r).max(a.g.abs_diff(b.g)).max(a.b.abs_diff(b.b)) <= TOLERANCE
+}
+
 /// The colour a screen shows, as last reported.
 #[derive(Default)]
 pub struct ScreenSource {
@@ -124,6 +146,16 @@ pub fn screen_follow(
 mod tests {
     use super::*;
     use crate::color::RED;
+
+    #[test]
+    fn capture_slows_down_while_the_picture_stands_still() {
+        assert_eq!(pace(0), 1);
+        assert_eq!(pace(STILL_FRAMES - 1), 1);
+        assert_eq!(pace(STILL_FRAMES), 2);
+        assert_eq!(pace(10_000), SLOWEST); // never slower than that, however long it stands
+        assert!(similar(Color::rgb(100, 100, 100), Color::rgb(101, 99, 102))); // compression noise is not movement
+        assert!(!similar(Color::rgb(100, 100, 100), Color::rgb(100, 100, 110)));
+    }
 
     #[test]
     fn balance_keeps_pure_colours() {

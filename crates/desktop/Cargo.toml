@@ -1,0 +1,44 @@
+[package]
+name = "chsmartbulb-desktop"
+description = "Linux and Windows for chsmartbulb: BLE and SPP links to the bulb, sound capture, and the computer being away"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version = "1.90"
+
+[features]
+# follow the screen of a Wayland session, through the desktop portal and PipeWire (Linux);
+# building it needs the PipeWire headers and libclang
+portal = ["dep:ashpd", "dep:pipewire"]
+
+[dependencies]
+async-trait.workspace = true
+btleplug = "0.13"
+chsmartbulb-core.workspace = true
+futures = "0.3"
+log.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "screencast"], optional = true }
+pipewire = { version = "0.10", optional = true }
+libc = "0.2"
+tokio = { workspace = true, features = ["net", "process", "io-util"] }
+x11rb = { version = "0.14", features = ["randr"] }
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+
+[target.'cfg(windows)'.dependencies]
+cpal = "0.18"
+windows-sys = { version = "0.61", features = [
+    "Win32_Devices_Bluetooth",
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Networking_WinSock",
+    "Win32_System_LibraryLoader",
+    "Win32_System_RemoteDesktop",
+    "Win32_UI_WindowsAndMessaging",
+] }

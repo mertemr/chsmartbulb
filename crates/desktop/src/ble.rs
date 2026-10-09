@@ -23,7 +23,7 @@ impl BleConnector {
     }
 
     async fn find(&self) -> Result<Peripheral> {
-        let adapter = super::adapter().await.map_err(chsmartbulb_core::Error::from)?;
+        let adapter = crate::adapter().await.map_err(chsmartbulb_core::Error::from)?;
         let deadline = tokio::time::Instant::now() + FIND_TIMEOUT;
         let mut scanning = false;
         let found = loop {
@@ -57,11 +57,16 @@ fn failed(error: btleplug::Error) -> Error {
 }
 
 fn characteristic(peripheral: &Peripheral, uuid: &str) -> Result<Characteristic> {
-    peripheral
-        .characteristics()
-        .into_iter()
-        .find(|c| c.uuid.to_string() == uuid)
-        .ok_or_else(|| Error::ConnectionFailed(format!("the device has no characteristic {uuid}; is it the bulb?")))
+    peripheral.characteristics().into_iter().find(|c| c.uuid.to_string() == uuid).ok_or_else(|| {
+        // BlueZ connects a bulb paired as a speaker over Classic whatever was asked for, and
+        // its services are then not the bulb's (see docs/device.md, "BLE on Linux / BlueZ")
+        let hint = if cfg!(target_os = "linux") {
+            "the system connected it as a speaker (Bluetooth Classic) instead of over BLE; use the rfcomm transport"
+        } else {
+            "is it the bulb?"
+        };
+        Error::ConnectionFailed(format!("the device has no characteristic {uuid}: {hint}"))
+    })
 }
 
 struct BleWriter {
