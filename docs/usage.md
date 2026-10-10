@@ -295,6 +295,7 @@ A screen agent sends `{"cmd": "screen", "color": "#rrggbb"}` whenever the colour
 | `drop` | Open up as the music builds, flash when it comes back in | `color`, `flash`, `build`, `delay`, `sensitivity` |
 | `ambient` | A calm colour that breathes, an accent on the beats | `base`, `accent`, `period`, `decay`, `delay`, `sensitivity` |
 | `screen` | Follow the colour of the screen | `smoothing`, `saturation`, `white`, `balance` |
+| `screensound` | The colour of the screen, as bright as the sound is loud (`chsmartbulbd` only) | `smoothing`, `saturation`, `white`, `balance`, `floor`, `release`, `shift`, `delay` |
 
 ```bash
 chsmartbulb effect breathe -c 00ff00 -p 3
@@ -425,6 +426,11 @@ chsmartbulb effect screen -s balance=1
 
 The service follows its own screen unless a [screen agent](#the-screen-from-another-machine) is
 connected. Capture goes through mss, which works on Windows, macOS and X11 but not on Wayland.
+
+`screensound` follows the screen and the sound together: the colour is that of `screen`, the
+brightness rises with the loudest band and falls back to `floor` at `release` per second, and the
+hue turns by up to `shift` degrees (60 at most), one way for bass-heavy sound and the other for
+bright sound. Only `chsmartbulbd` has it; the Python service does not.
 
 ## Library
 
