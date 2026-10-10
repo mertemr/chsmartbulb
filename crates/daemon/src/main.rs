@@ -1,6 +1,6 @@
-//! The background service, as `chsmartbulb daemon` of the Python package runs it: it keeps
-//! the link to the bulb, runs the effects and answers the socket protocol on a local
-//! socket and, when asked, on the network together with the web interface.
+//! The background service: it keeps the link to the bulb, runs the effects and answers
+//! the socket protocol on a local socket and, when asked, on the network together with
+//! the web interface.
 //!
 //! ```bash
 //! chsmartbulbd --address AA:BB:CC:DD:EE:FF --listen 8377 --web 8378 --token SECRET
@@ -22,7 +22,9 @@ use chsmartbulb_core::{Bearer, Bulb, Connector, Service};
 use clap::{Parser, ValueEnum};
 use include_dir::{include_dir, Dir};
 
-/// The page the Python package carries, so the two serve the same one.
+mod settings;
+
+/// The page built from `web/`.
 static WEB_INTERFACE: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../web/bundle");
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -50,12 +52,17 @@ impl Look {
 
 /// Run the background service of a CHSmartBulb / BL08A bulb in the foreground.
 #[derive(Parser)]
-#[command(name = "chsmartbulbd", version)]
+#[command(
+    name = "chsmartbulbd",
+    version,
+    after_help = "Options that name a variable can be set once in the settings file, one NAME=VALUE a line:\n\
+                  $XDG_CONFIG_HOME/chsmartbulb/config (%APPDATA%\\chsmartbulb\\config on Windows)."
+)]
 struct Args {
     /// Bluetooth address of the bulb
     #[arg(short, long, env = "CHSMARTBULB_ADDRESS", required_unless_present = "simulate")]
     address: Option<String>,
-    #[arg(short, long, value_enum, default_value = "rfcomm")]
+    #[arg(short, long, value_enum, default_value = "rfcomm", env = "CHSMARTBULB_TRANSPORT")]
     transport: Transport,
     /// RFCOMM channel
     #[arg(long, default_value_t = RFCOMM_CHANNEL)]
@@ -86,13 +93,13 @@ struct Args {
     #[arg(long)]
     no_state: bool,
     /// Audio source for sound-reactive effects (default: monitor of the default output; Linux)
-    #[arg(long, value_name = "SOURCE")]
+    #[arg(long, value_name = "SOURCE", env = "CHSMARTBULB_AUDIO_DEVICE")]
     audio_device: Option<String>,
     /// Listen to the microphone instead of what the computer plays
     #[arg(long)]
     mic: bool,
     /// Which monitor of this computer the screen effect follows; 0 is all (a Wayland desktop asks instead)
-    #[arg(long, value_name = "N", default_value_t = PRIMARY)]
+    #[arg(long, value_name = "N", default_value_t = PRIMARY, env = "CHSMARTBULB_MONITOR")]
     monitor: i64,
     /// Forget the screen a Wayland desktop was told to share, so it asks again
     #[arg(long)]
@@ -118,13 +125,13 @@ fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from)
 }
 
-/// Where the Python service keeps the light state too, so either picks up where the other left.
+/// Where the light state is kept across restarts.
 fn default_state_path() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_STATE_HOME").map(PathBuf::from).or_else(|| Some(home()?.join(".local/state")))?;
     Some(base.join("chsmartbulb/state.json"))
 }
 
-/// Where the Python command line looks for the service.
+/// Where the command line looks for the service.
 #[cfg(unix)]
 fn default_socket_path() -> PathBuf {
     let base = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|| {
@@ -313,12 +320,17 @@ async fn run(args: Args) -> Result<(), String> {
     Ok(())
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> std::process::ExitCode {
+fn start() -> Result<(), String> {
+    settings::apply()?; // before the options are read, and before any thread exists
     let args = Args::parse();
     let level = if args.verbose { log::LevelFilter::Debug } else { log::LevelFilter::Info };
     env_logger::Builder::new().filter_level(level).parse_default_env().init();
-    match run(args).await {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+    runtime.block_on(run(args))
+}
+
+fn main() -> std::process::ExitCode {
+    match start() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("chsmartbulbd: {error}");
