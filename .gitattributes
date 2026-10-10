@@ -8,6 +8,6 @@ docs/** linguist-documentation
 uv.lock linguist-generated
 
 # Built from web/ with `pnpm build`; tracked so an install from git has the page.
-src/chsmartbulb/webui/** linguist-generated -diff
+web/bundle/** linguist-generated -diff
 web/pnpm-lock.yaml linguist-generated
 app/pnpm-lock.yaml linguist-generated

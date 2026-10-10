@@ -1,9 +1,9 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-/// The page the Python service serves, embedded so the app can serve it to the network.
+/// The web interface, embedded so the app can serve it to the network.
 fn embed_web_interface() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/chsmartbulb/webui");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/bundle");
     println!("cargo:rerun-if-changed={}", root.display());
     let mut files = Vec::new();
     collect(&root, &mut files);

@@ -23,7 +23,7 @@ use clap::{Parser, ValueEnum};
 use include_dir::{include_dir, Dir};
 
 /// The page the Python package carries, so the two serve the same one.
-static WEB_INTERFACE: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../src/chsmartbulb/webui");
+static WEB_INTERFACE: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../web/bundle");
 
 #[derive(Clone, Copy, ValueEnum)]
 enum Transport {
