@@ -5,6 +5,7 @@
   import Icon from './components/Icon.svelte'
   import Login from './components/Login.svelte'
   import Slider from './components/Slider.svelte'
+  import SleepTimer from './components/SleepTimer.svelte'
   import { APP, app, Draft } from './lib/app.svelte'
   import { cssColor } from './lib/color'
   import { latest } from './lib/latest'
@@ -159,6 +160,7 @@
             track="linear-gradient(to right, color-mix(in srgb, {glow} 15%, var(--color-raised)), {glow})"
             oninput={dim}
           />
+          <SleepTimer />
         </section>
         <section class={[CARD, tab !== 'device' && 'hidden lg:block']}><DevicePanel /></section>
       </div>

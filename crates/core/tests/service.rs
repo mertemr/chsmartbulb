@@ -384,7 +384,71 @@ async fn effects_reply_describes_every_parameter_and_the_native_effects() {
     let names: Vec<&str> = reply["native"]["names"].as_array().unwrap().iter().map(|n| n.as_str().unwrap()).collect();
     assert!(names.contains(&"breathing") && !names.contains(&"fixed"));
     assert_eq!(reply["native"]["speed"], json!([0, 15]));
-    assert_eq!(reply["effects"].as_array().unwrap().len(), 19);
+    assert_eq!(reply["effects"].as_array().unwrap().len(), 28);
+    service.close().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_sleep_timer_dims_the_light_and_switches_it_off() {
+    let fake = FakeBulb::new();
+    let service = attached(&fake, options()).await;
+    ask(&service, json!({"cmd": "color", "color": "#ff0000", "brightness": 0.8})).await;
+    assert_eq!(ask(&service, json!({"cmd": "sleep", "minutes": 10})).await["ok"], true);
+    let state = service.state();
+    assert_eq!((&state["sleep"]["minutes"], &state["sleep"]["left"]), (&json!(10.0), &json!(600.0)));
+    tokio::time::sleep(Duration::from_secs(301)).await;
+    let half = fake.last_light().r;
+    assert!((98..=104).contains(&half), "{half}"); // half of 0.8 of 255
+    assert_eq!(service.state()["brightness"], 0.8); // the plan keeps what the light comes back to
+    ask(&service, json!({"cmd": "color", "color": "#0000ff"})).await; // changing the light does not end it
+    assert!((98..=104).contains(&fake.last_light().b));
+    tokio::time::sleep(Duration::from_secs(300)).await;
+    assert_eq!(fake.with(|s| s.channels), [0; 5]);
+    let state = service.state();
+    assert_eq!((&state["on"], &state["sleep"]), (&json!(false), &Value::Null));
+    ask(&service, json!({"cmd": "on"})).await;
+    assert_eq!(fake.last_light().b, 204); // back at full: 0.8 of 255
+    service.close().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_sleep_timer_can_be_called_off() {
+    let fake = FakeBulb::new();
+    let service = attached(&fake, options()).await;
+    ask(&service, json!({"cmd": "color", "color": "#ff0000"})).await;
+    ask(&service, json!({"cmd": "sleep", "minutes": 2})).await;
+    tokio::time::sleep(Duration::from_secs(61)).await;
+    assert!(fake.last_light().r < 135);
+    ask(&service, json!({"cmd": "sleep", "minutes": 0})).await;
+    assert_eq!(fake.last_light().r, 255);
+    assert_eq!(service.state()["sleep"], Value::Null);
+    tokio::time::sleep(Duration::from_secs(120)).await;
+    assert_eq!(fake.last_light().r, 255); // and it stays on
+
+    ask(&service, json!({"cmd": "sleep", "minutes": 2})).await;
+    ask(&service, json!({"cmd": "off"})).await; // switching it off by hand ends the timer too
+    assert_eq!(service.state()["sleep"], Value::Null);
+    let reply = ask(&service, json!({"cmd": "sleep", "minutes": 2})).await;
+    assert!(reply["error"].as_str().unwrap().contains("off already"), "{reply}");
+    let reply = ask(&service, json!({"cmd": "sleep", "minutes": 9000})).await;
+    assert!(reply["error"].as_str().unwrap().contains("0..480"), "{reply}");
+    service.close().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_sleep_timer_dims_a_running_effect() {
+    let fake = FakeBulb::new();
+    let service = attached(&fake, options()).await;
+    ask(&service, json!({"cmd": "effect", "name": "strobe", "params": {"color": "red", "hz": 2, "duty": 0.9}})).await;
+    ask(&service, json!({"cmd": "sleep", "minutes": 1})).await;
+    tokio::time::sleep(Duration::from_millis(30_100)).await;
+    assert_eq!(service.state()["playing"], true);
+    let half = fake.last_light().r;
+    assert!((120..=135).contains(&half), "{half}");
+    tokio::time::sleep(Duration::from_secs(31)).await;
+    let state = service.state();
+    assert_eq!((&state["on"], &state["playing"]), (&json!(false), &json!(false)));
+    assert_eq!(fake.with(|s| s.channels), [0; 5]);
     service.close().await;
 }
 

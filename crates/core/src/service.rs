@@ -102,6 +102,35 @@ impl Plan {
     }
 }
 
+/// The longest a sleep timer runs, in minutes.
+pub const MAX_SLEEP: f64 = 480.0;
+/// How many times a sleep timer dims the light on its way down, about.
+const SLEEP_STEPS: u32 = 240;
+/// The brightness a sleep timer ends on before it switches the light off.
+const SLEEP_FLOOR: f64 = 0.01;
+
+/// A sleep timer: the light dims from when it was set until it is switched off.
+#[derive(Debug, Clone, Copy)]
+struct Sleep {
+    started: Instant,
+    lasts: Duration,
+}
+
+impl Sleep {
+    fn seconds_left(&self) -> f64 {
+        (self.lasts.as_secs_f64() - self.started.elapsed().as_secs_f64()).max(0.0)
+    }
+
+    /// The share of the brightness still shown: 1 when set, 0 when the time is up.
+    fn share(&self) -> f64 {
+        self.seconds_left() / self.lasts.as_secs_f64()
+    }
+
+    fn tick(&self) -> Duration {
+        (self.lasts / SLEEP_STEPS).clamp(Duration::from_millis(100), Duration::from_secs(5))
+    }
+}
+
 /// How bright a dimmed light stays while the computer is locked.
 pub const AWAY_DIM: f64 = 0.1;
 /// Why a computer can be away.
@@ -246,6 +275,9 @@ struct Inner {
     away_looks: StdMutex<HashMap<String, AwayLook>>,
     /// Why the computer is away, while it is: the light shows the away look, the plan stays as it is.
     away: StdMutex<Option<String>>,
+    /// The sleep timer, while one runs: the light is dimmer than the plan says.
+    sleep: StdMutex<Option<Sleep>>,
+    sleep_task: StdMutex<Option<JoinHandle<()>>>,
 }
 
 fn locked<T>(mutex: &StdMutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -333,6 +365,8 @@ impl Builder {
             pending_save: StdMutex::new(None),
             away_looks: StdMutex::new(away_looks),
             away: StdMutex::new(None),
+            sleep: StdMutex::new(None),
+            sleep_task: StdMutex::new(None),
         });
         inner.state.send_replace(inner.state_json());
         Service { inner }
@@ -373,6 +407,7 @@ impl Service {
             task.abort();
             let _ = task.await;
         }
+        self.inner.end_sleep();
         self.inner.stop_effect().await;
         self.inner.bulb.disconnect().await;
         self.inner.write_state();
@@ -570,7 +605,7 @@ impl Service {
     }
 }
 
-const COMMANDS: [&str; 17] = [
+const COMMANDS: [&str; 18] = [
     "status",
     "on",
     "off",
@@ -588,6 +623,7 @@ const COMMANDS: [&str; 17] = [
     "monitor",
     "away",
     "back",
+    "sleep",
 ];
 
 /// One monitor an agent lists, kept only when it says its index and size.
@@ -665,6 +701,9 @@ impl Inner {
             "problem": if connected { None } else { locked(&self.problem).clone() },
             "playing": self.playing(),
             "away": locked(&self.away).clone(),
+            "sleep": locked(&self.sleep).map(|sleep| {
+                json!({"minutes": sleep.lasts.as_secs_f64() / 60.0, "left": sleep.seconds_left().ceil()})
+            }),
             "audio": source(audio_agents),
             "screen": source(screen_agents),
             "agents": {"audio": audio_agents, "screen": screen_agents},
@@ -829,11 +868,15 @@ impl Inner {
             if let Some(reason) = away {
                 return self.show_away(&reason, &plan).await;
             }
-            if self.bulb.brightness() != plan.brightness {
-                self.bulb.set_brightness(plan.brightness).await?;
+            let level = self.level();
+            if !plan.on {
+                self.bulb.turn_off(fade).await?;
+            }
+            if self.bulb.brightness() != level {
+                self.bulb.set_brightness(level).await?; // sends nothing while the light is off
             }
             if !plan.on {
-                self.bulb.turn_off(fade).await
+                Ok(())
             } else if let Some(effect) = &plan.effect {
                 self.start_effect(effect, duration, &mut held).await
             } else if let Some(native) = &plan.native {
@@ -865,6 +908,77 @@ impl Inner {
         } else {
             self.bulb.set_brightness(plan.brightness.min(AWAY_DIM)).await
         }
+    }
+
+    /// How bright the light is to be: what the plan says, less what a sleep timer has taken.
+    fn level(&self) -> f64 {
+        let brightness = locked(&self.plan).brightness;
+        match *locked(&self.sleep) {
+            Some(sleep) => (brightness * sleep.share()).max(brightness.min(SLEEP_FLOOR)),
+            None => brightness,
+        }
+    }
+
+    /// Show the level as it is now, without disturbing a running effect.
+    async fn show_level(self: &Arc<Self>) -> Result<()> {
+        if !(self.playing() && self.bulb.is_connected()) {
+            return self.apply(false, None).await;
+        }
+        // a running effect picks the new level up on its next frame
+        match self.bulb.set_brightness(self.level()).await {
+            Err(error) if error.is_link_error() => {
+                self.link_lost(&error).await;
+                Ok(())
+            }
+            other => other,
+        }
+    }
+
+    fn end_sleep(&self) {
+        *locked(&self.sleep) = None;
+        if let Some(task) = locked(&self.sleep_task).take() {
+            task.abort();
+        }
+    }
+
+    /// Dim the light step by step for `lasts`, then switch it off.
+    fn start_sleep(self: &Arc<Self>, lasts: Duration) {
+        let sleep = Sleep { started: Instant::now(), lasts };
+        *locked(&self.sleep) = Some(sleep);
+        let weak = Arc::downgrade(self);
+        let task = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(sleep.tick()).await;
+                let Some(inner) = weak.upgrade() else { return };
+                let _guard = inner.lock.lock().await;
+                if locked(&inner.sleep).is_none() {
+                    return;
+                }
+                if sleep.seconds_left() <= 0.0 {
+                    *locked(&inner.sleep) = None;
+                    locked(&inner.plan).on = false;
+                    inner.save();
+                    if let Err(error) = inner.apply(true, None).await {
+                        log::warn!("the sleep timer could not switch the light off: {error}");
+                    }
+                    inner.notify();
+                    return;
+                }
+                // a light command would end an effect of the bulb's own, so that one stays as it is
+                let dims = {
+                    let plan = locked(&inner.plan);
+                    plan.on && plan.native.is_none()
+                };
+                if dims && locked(&inner.away).is_none() && inner.bulb.is_connected() {
+                    if let Err(error) = inner.bulb.set_brightness(inner.level()).await {
+                        if error.is_link_error() {
+                            inner.link_lost(&error).await;
+                        }
+                    }
+                }
+            }
+        });
+        *locked(&self.sleep_task) = Some(task);
     }
 
     async fn link_lost(&self, error: &Error) {
@@ -1120,7 +1234,27 @@ impl Inner {
                 }
                 Ok(reply)
             }
+            "sleep" => {
+                let minutes = match request.get("minutes") {
+                    None | Some(Value::Null) => 0.0,
+                    Some(value) => as_number(value, "minutes")?,
+                };
+                if !(0.0..=MAX_SLEEP).contains(&minutes) {
+                    return Err(invalid(format!("minutes must be within 0..{MAX_SLEEP}")));
+                }
+                if minutes > 0.0 && !locked(&self.plan).on {
+                    return Err(invalid("the light is off already"));
+                }
+                self.end_sleep();
+                if minutes > 0.0 {
+                    self.start_sleep(Duration::from_secs_f64(minutes * 60.0));
+                } else {
+                    self.show_level().await?; // back to the brightness it had
+                }
+                Ok(json!({}))
+            }
             "on" | "off" => {
+                self.end_sleep(); // either way the light is no longer on its way down
                 locked(&self.plan).on = command == "on";
                 self.commit(fade, None).await?;
                 Ok(json!({}))
@@ -1145,18 +1279,7 @@ impl Inner {
                 *locked(&self.away) = None;
                 self.adopt_on_connect.store(false, Ordering::SeqCst);
                 self.save();
-                if self.playing() && self.bulb.is_connected() {
-                    // a running effect picks the new level up on its next frame
-                    let level = locked(&self.plan).brightness;
-                    if let Err(error) = self.bulb.set_brightness(level).await {
-                        if !error.is_link_error() {
-                            return Err(error);
-                        }
-                        self.link_lost(&error).await;
-                    }
-                } else {
-                    self.apply(false, None).await?;
-                }
+                self.show_level().await?;
                 Ok(json!({}))
             }
             "effect" => {

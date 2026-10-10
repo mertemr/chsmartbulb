@@ -137,6 +137,8 @@ def test_the_cli_goes_to_the_bulb_when_no_service_runs(monkeypatch, capsys, tmp_
     )
     assert cli.main([*base, "timers"]) == 0
     assert "#6 'power off' 06:20" in capsys.readouterr().out
+    assert cli.main([*base, "sleep", "30"]) == 1  # only a service can keep counting
+    assert "kept by a running service" in capsys.readouterr().err
 
 
 def test_the_cli_lists_and_checks_effects_with_the_rust_core(monkeypatch, capsys, tmp_path):

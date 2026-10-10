@@ -14,7 +14,7 @@ use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 
 use crate::color::{Color, BLUE, OFF, RED};
-use crate::effects::Effect;
+use crate::effects::{along, Effect};
 use crate::error::{invalid, Result};
 
 pub const RATE: u32 = 22050;
@@ -704,6 +704,125 @@ pub fn music_stereo(
     }))
 }
 
+/// The bass in one colour and the treble in another, each as bright as its band is loud.
+///
+/// The two add up, so a kick and a hi-hat at once show both colours mixed.
+pub fn music_bands(source: Arc<AudioSource>, low: Color, high: Color, release: f64, delay: f64) -> Result<Effect> {
+    source.set_delay(delay)?;
+    if release <= 0.0 {
+        return Err(invalid("release must be positive"));
+    }
+    let mut shown = [0.0f64; 2];
+    let mut last = 0.0;
+    Ok(Box::new(move |t| {
+        let fall = release * (t - last).max(0.0);
+        last = t;
+        let levels = source.heard().levels;
+        shown = [levels.bass.max(shown[0] - fall), levels.treble.max(shown[1] - fall)];
+        let lit = |color: Color, level: f64| if level * level >= DARK { color.scaled(level * level) } else { OFF };
+        let (low, high) = (lit(low, shown[0]), lit(high, shown[1]));
+        Color::rgbw(
+            low.r.saturating_add(high.r),
+            low.g.saturating_add(high.g),
+            low.b.saturating_add(high.b),
+            low.w.saturating_add(high.w),
+        )
+    }))
+}
+
+/// Default colours of the bands effect.
+pub const BANDS_LOW: Color = Color::rgb(255, 0, 40);
+pub const BANDS_HIGH: Color = Color::rgb(0, 120, 255);
+
+/// How loud the music has been lately picks the colour: the first of `colors` for a calm
+/// passage, the last for an intense one. The brightness follows the sound as it is now.
+///
+/// `smoothing` is how many seconds of music the colour looks back on.
+pub fn music_energy(
+    source: Arc<AudioSource>,
+    colors: &[Color],
+    smoothing: f64,
+    floor: f64,
+    delay: f64,
+) -> Result<Effect> {
+    source.set_delay(delay)?;
+    if colors.is_empty() {
+        return Err(invalid("colors must not be empty"));
+    }
+    if smoothing <= 0.0 {
+        return Err(invalid("smoothing must be positive"));
+    }
+    if !(0.0..=1.0).contains(&floor) {
+        return Err(invalid("floor must be within 0..1"));
+    }
+    let colors = colors.to_vec();
+    let mut energy = 0.0f64;
+    let mut shown = 0.0f64;
+    let mut last = 0.0;
+    Ok(Box::new(move |t| {
+        let step = (t - last).max(0.0);
+        last = t;
+        let loudness = source.heard().levels.loudness();
+        energy += (loudness - energy) * (1.0 - (-step / smoothing).exp());
+        shown = loudness.max(shown - ENERGY_RELEASE * step);
+        let level = floor + (1.0 - floor) * shown * shown;
+        if level < DARK {
+            return OFF;
+        }
+        // the levels are relative to the recent peak, so their average seldom leaves this span
+        let place = (energy - ENERGY_SPAN.0) / (ENERGY_SPAN.1 - ENERGY_SPAN.0);
+        along(&colors, place).scaled(level)
+    }))
+}
+
+/// How fast the brightness of the energy effect falls, per second.
+const ENERGY_RELEASE: f64 = 3.0;
+/// The average loudness shown as the first and as the last colour.
+const ENERGY_SPAN: (f64, f64) = (0.15, 0.7);
+/// Default colours of the energy effect, calm to intense.
+pub const ENERGY_COLORS: [Color; 3] = [Color::rgb(0, 60, 255), Color::rgb(200, 0, 255), Color::rgb(255, 30, 0)];
+
+/// A colour that wanders around the wheel, swelling and sinking with the music instead of
+/// flashing on it: no beats, only how loud it is, taken slowly.
+///
+/// `smoothing` is how many seconds the brightness takes to follow the sound, both ways.
+pub fn music_chill(
+    source: Arc<AudioSource>,
+    period: f64,
+    saturation: f64,
+    floor: f64,
+    smoothing: f64,
+    delay: f64,
+) -> Result<Effect> {
+    source.set_delay(delay)?;
+    if period <= 0.0 {
+        return Err(invalid("period must be positive"));
+    }
+    if !(0.0..=1.0).contains(&saturation) {
+        return Err(invalid("saturation must be within 0..1"));
+    }
+    if !(0.0..=1.0).contains(&floor) {
+        return Err(invalid("floor must be within 0..1"));
+    }
+    if smoothing < 0.0 {
+        return Err(invalid("smoothing must not be negative"));
+    }
+    let mut shown = 0.0f64;
+    let mut last = 0.0;
+    Ok(Box::new(move |t| {
+        let step = (t - last).max(0.0);
+        last = t;
+        let loudness = source.heard().levels.loudness();
+        let blend = if smoothing > 0.0 { 1.0 - (-step / smoothing).exp() } else { 1.0 };
+        shown += (loudness - shown) * blend;
+        let level = floor + (1.0 - floor) * shown;
+        if level < DARK {
+            return OFF;
+        }
+        Color::from_hsv(360.0 * t / period, saturation, 1.0).scaled(level)
+    }))
+}
+
 /// Default colours of the stereo effect.
 pub const STEREO_LEFT: Color = BLUE;
 pub const STEREO_RIGHT: Color = RED;
@@ -1053,6 +1172,59 @@ mod tests {
             [(0.0, 5.0, 0.0, 0.5), (6.0, 0.0, 0.0, 0.5), (6.0, 5.0, 5.0, 0.5), (6.0, 5.0, 0.0, 2.0)]
         {
             assert!(music_ambient(source.clone(), WARM, WHITE, period, decay, delay, sensitivity).is_err());
+        }
+    }
+
+    #[test]
+    fn bands_show_the_bass_and_the_treble_in_their_own_colours() {
+        let (clock, _) = manual_clock();
+        let source = AudioSource::new(clock);
+        let mut effect = music_bands(source.clone(), RED, BLUE, 2.0, 0.0).unwrap();
+        assert_eq!(effect(0.0), OFF);
+        source.publish(Levels { bass: 1.0, ..Levels::default() }, 0.0);
+        assert_eq!(effect(0.1), RED);
+        source.publish(Levels { treble: 1.0, mid: 1.0, ..Levels::default() }, 0.0);
+        assert_eq!(effect(0.35), Color::rgb(64, 0, 255)); // the bass has fallen to a half, squared
+        source.publish(Levels::default(), 0.0);
+        assert_eq!(effect(5.0), OFF);
+        assert!(music_bands(source, RED, BLUE, 0.0, 0.0).is_err());
+    }
+
+    #[test]
+    fn energy_picks_the_colour_by_how_loud_it_has_been() {
+        let (clock, _) = manual_clock();
+        let source = AudioSource::new(clock);
+        let mut effect = music_energy(source.clone(), &[BLUE, RED], 2.0, 0.0, 0.0).unwrap();
+        assert_eq!(effect(0.0), OFF);
+        source.publish(Levels { mid: 1.0, ..Levels::default() }, 0.0);
+        assert_eq!(effect(0.05), BLUE); // loud just now, calm until now
+        let later = effect(1.0);
+        assert!(later.r > 100 && later.b > 30, "{later:?}"); // on its way
+        assert_eq!(effect(30.0), RED);
+        let mut lit = music_energy(source.clone(), &[BLUE, RED], 2.0, 0.5, 0.0).unwrap();
+        source.publish(Levels::default(), 0.0);
+        assert_eq!(lit(0.0), Color::rgb(0, 0, 128)); // the floor, in the calm colour
+        assert!(music_energy(source.clone(), &[], 2.0, 0.0, 0.0).is_err());
+        assert!(music_energy(source, &[BLUE], 0.0, 0.0, 0.0).is_err());
+    }
+
+    #[test]
+    fn chill_swells_slowly_and_keeps_its_floor() {
+        let (clock, _) = manual_clock();
+        let source = AudioSource::new(clock);
+        let mut effect = music_chill(source.clone(), 60.0, 1.0, 0.2, 1.0, 0.0).unwrap();
+        assert_eq!(effect(0.0), Color::rgb(51, 0, 0)); // silent: the floor, at the start of the wheel
+        source.publish(Levels { bass: 1.0, ..Levels::default() }, 0.0);
+        let soon = effect(0.1).r;
+        assert!((60..=80).contains(&soon), "{soon}"); // a loud moment does not flash
+        assert!(effect(10.0).r.max(effect(10.0).g) >= 250);
+        source.publish(Levels::default(), 0.0);
+        let sinking = effect(10.5);
+        assert!(sinking.r.max(sinking.g) > 150, "{sinking:?}"); // nor does it drop at once
+        for (period, saturation, floor, smoothing) in
+            [(0.0, 1.0, 0.2, 1.0), (60.0, 2.0, 0.2, 1.0), (60.0, 1.0, 2.0, 1.0), (60.0, 1.0, 0.2, -1.0)]
+        {
+            assert!(music_chill(source.clone(), period, saturation, floor, smoothing, 0.0).is_err());
         }
     }
 }

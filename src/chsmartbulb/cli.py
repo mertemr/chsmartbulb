@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import functools
 import logging
+import math
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -92,6 +93,8 @@ def _request(args: argparse.Namespace) -> dict[str, Any]:
         return {"cmd": "timer", "index": args.index, "enabled": args.state == "on"}
     if command == "raw":
         return {"cmd": "raw", "hex": args.hex}
+    if command == "sleep":
+        return {"cmd": "sleep", "minutes": args.minutes}
     return {"cmd": command}  # status, stop, effects, info, timers
 
 
@@ -117,6 +120,8 @@ def _print(command: str, reply: dict[str, Any]) -> None:
                 print(f"effect:     {reply['effect']['name']} {reply['effect']['params'] or ''}{running}")
             if reply["native"]:
                 print(f"native:     {reply['native']['name']} speed {reply['native']['speed']}")
+            if reply.get("sleep"):
+                print(f"sleep:      off in {math.ceil(reply['sleep']['left'] / 60)} min")
         if "bulb" in reply:
             print(f"reported:   {reply['bulb']} (colour mix; the bulb does not report brightness)")
     elif command == "info":
@@ -179,6 +184,8 @@ async def _direct(args: argparse.Namespace, request: dict[str, Any]) -> dict[str
         if _native.load() is None:
             raise SmartBulbError("the effects are listed by a running service, or with chsmartbulb-native installed")
         return {"ok": True, "effects": effects.describe()}
+    if request["cmd"] == "sleep":
+        raise SmartBulbError("a sleep timer is kept by a running service; none runs here")
     fps = getattr(args, "fps", effects.DEFAULT_FPS)
     return {"ok": True, **await direct.run(_bulb(args), request, fps=fps, music=_music(args), screen=_screen(args))}
 
@@ -312,6 +319,8 @@ def build_parser(settings: Mapping[str, str] | None = None) -> argparse.Argument
 
     sub.add_parser("effects", help="list the available effects and their parameters")
     sub.add_parser("stop", help="stop the running effect and return to the plain colour")
+    cmd = sub.add_parser("sleep", help="dim the light over some minutes, then switch it off; 0 calls it off")
+    cmd.add_argument("minutes", type=float)
     sub.add_parser("timers", help="list schedule entries stored in the bulb")
     cmd = sub.add_parser("timer", help="enable or disable a stored schedule entry")
     cmd.add_argument("index", type=int)

@@ -189,6 +189,19 @@ def test_cli_talks_to_a_remote_service(capsys):
     assert "screensound both [screen, audio]" in out
 
 
+def test_cli_sets_a_sleep_timer_and_shows_it(capsys):
+    async def scenario():
+        status = {**STATUS, "sleep": {"minutes": 30.0, "left": 1741.0}}
+        async with FakeHub(replies={"status": status}) as hub:
+            args = ["--host", str(hub.remote), "--token", "s3cret"]
+            assert await asyncio.to_thread(main, [*args, "sleep", "30"]) == 0
+            assert await asyncio.to_thread(main, [*args, "status"]) == 0
+            return hub.requests
+
+    assert run(scenario())[0] == {"cmd": "sleep", "minutes": 30.0}
+    assert "sleep:      off in 30 min" in capsys.readouterr().out
+
+
 def test_a_service_without_a_token_lets_everyone_in():
     async def scenario():
         async with FakeHub(token=None) as hub:

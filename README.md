@@ -13,8 +13,10 @@ the bulb's protocol, which was worked out and documented here.
 
 - RGB colour, the separate white LEDs, brightness, on/off, soft fades
 - The 13 effects built into the bulb, including its sound-reactive mode
-- 19 more effects, generated on the computer or phone and streamed to the bulb: patterns, a step
-  editor for your own, nine that follow the music, and two that follow the colour of a screen
+- 28 more effects, generated on the computer or phone and streamed to the bulb: patterns from a
+  candle to a thunderstorm and a sunrise, a step editor for your own, twelve that follow the
+  music, and four that follow the colour of a screen
+- A sleep timer that dims whatever is showing and then switches it off
 - A background service (`chsmartbulbd`, one Rust program for Linux and Windows) that keeps the
   connection, runs effects and restores the light when the bulb comes back after losing power
 - A web interface served by that service, for phones and other computers on the network

@@ -37,6 +37,7 @@ the token, so keep it readable by you alone.
 | `effects` | List those effects and their parameters |
 | `native NAME [-c COLOR] [-s 0..15]` | Effect built into the bulb (`breathing`, `rainbow`, `flash`, `music`, ...) |
 | `stop` | Stop the effect and return to the plain colour |
+| `sleep MINUTES` | Dim the light over that time, then switch it off; `0` calls it off |
 | `timers` | List schedule entries stored in the bulb |
 | `timer INDEX on\|off` | Enable or disable a stored entry |
 | `raw HEX` | Send one raw frame; prints the answer to a query |
@@ -87,6 +88,12 @@ simulated bulb for trying things without one.
   command bypass the service, which only works when the service is not holding the connection.
 - Windows has no such socket: there the service needs `--listen` or `--web`, and the command line
   reaches it with `--host localhost`.
+
+A sleep timer (`chsmartbulb sleep 30`, or the buttons under the brightness on the page) dims
+whatever the light shows, effects included, in small steps until the time is up, and then switches
+it off. The brightness it had is kept for the next time it is switched on. Changing the colour or
+the effect does not end the timer; switching the light on or off does, and so does `sleep 0`. An
+effect of the bulb's own cannot be dimmed on the way, so that one runs as it is until it goes off.
 
 To start it with your session, copy [`contrib/chsmartbulb.service`](../contrib/chsmartbulb.service)
 to `~/.config/systemd/user/`, fill in the path (and the address, unless the settings file has
@@ -238,7 +245,7 @@ One JSON object per line in each direction. Replies carry `"ok"` and, on failure
 ```
 
 Commands: `status`, `on`, `off`, `color`, `brightness`, `effect`, `native`, `stop`, `effects`,
-`info`, `timers`, `timer`, `raw`, `subscribe`, `reconnect`, `monitor`, `away`, `back`.
+`info`, `timers`, `timer`, `raw`, `subscribe`, `reconnect`, `monitor`, `away`, `back`, `sleep`.
 
 Agents stream `audio` or `screen` blocks, which are not answered. An agent may greet first with
 `{"cmd": "hello", "kind": "screen", "name": "desk", "monitors": [{"index": 1, "width": 1920,
@@ -261,7 +268,9 @@ it returns. `agents` counts the connected agents of each kind and `watchers` the
 clients. `reconnect` makes the service try at once instead of waiting out its retry delay.
 `{"cmd": "away", "reason": "lock"}` (or `sleep`, `shutdown`) rests the light as
 [`--on-lock` and `--on-sleep`](#when-the-computer-locks-sleeps-or-shuts-down) say, `back` ends
-that, and `away` in the state is the reason while it lasts.
+that, and `away` in the state is the reason while it lasts. `{"cmd": "sleep", "minutes": 30}`
+sets the sleep timer (up to 480 minutes; `0` calls it off), and the state then carries
+`"sleep": {"minutes": 30, "left": 1800}` with the seconds left when it was told.
 
 `effects` lists each effect with what it follows (`needs`, and `also` for one that follows both
 the sound and the screen), its default `params` and a `schema` per parameter
@@ -289,6 +298,10 @@ A screen agent sends `{"cmd": "screen", "color": "#rrggbb"}` whenever the colour
 | `candle` | Uneven flicker | `color`, `depth` |
 | `palette` | Drift through a list of colours | `colors`, `hold`, `fade_in` |
 | `police` | Alternate red and blue | `period` |
+| `aurora` | Slow curtains of light wandering through a few colours | `colors`, `period`, `depth` |
+| `fire` | Embers that flare up into flames | `color`, `flame`, `depth`, `speed` |
+| `lightning` | A dim sky, and strikes that flicker and die away | `color`, `sky`, `glow`, `power`, `gap` |
+| `sunrise` | From dark through red and orange to a warm light, then it stays | `color`, `minutes` |
 | `custom` | Your own colours, timings and fades | `steps`, `speed` |
 | `music` | Flash on the beat | `color`, `decay`, `sensitivity`, `delay` |
 | `spectrum` | Bass, mids and treble as red, green and blue | `release`, `delay` |
@@ -299,8 +312,13 @@ A screen agent sends `{"cmd": "screen", "color": "#rrggbb"}` whenever the colour
 | `centroid` | Blend two colours by whether the sound is bass-heavy or bright | `low`, `high`, `width`, `release`, `delay` |
 | `drop` | Open up as the music builds, flash when it comes back in | `color`, `flash`, `build`, `delay`, `sensitivity` |
 | `ambient` | A calm colour that breathes, an accent on the beats | `base`, `accent`, `period`, `decay`, `delay`, `sensitivity` |
+| `bands` | The bass in one colour, the treble in another | `low`, `high`, `release`, `delay` |
+| `energy` | The colour by how intense the music has been | `colors`, `smoothing`, `floor`, `delay` |
+| `chill` | A wandering colour that swells and sinks with the music | `period`, `saturation`, `floor`, `smoothing`, `delay` |
 | `screen` | Follow the colour of the screen | `smoothing`, `saturation`, `white`, `balance` |
 | `screensound` | The colour of the screen, as bright as the sound is loud | `smoothing`, `saturation`, `white`, `balance`, `floor`, `release`, `shift`, `delay` |
+| `screencut` | The colour of the screen, with a flash when the scene cuts | `smoothing`, `saturation`, `white`, `balance`, `flash`, `decay` |
+| `screenhue` | Only the hue of the screen, fully lit even when the picture is dark | `smoothing`, `saturation`, `balance` |
 
 ```bash
 chsmartbulb effect breathe -c 00ff00 -p 3
@@ -322,10 +340,21 @@ Only `color` is required; `hold` defaults to 1 second and `fade` to 0. `ease` sh
 sequence, and there can be up to 16 steps. The web interface has an editor for it under Patterns
 and keeps the last settings of every effect in the browser.
 
+`lightning` is a thunderstorm: the light rests on `sky` at `glow` of its brightness, and strikes
+of `color` at `power` of theirs come about every `gap` seconds, at uneven intervals, each a
+flicker of one to four strokes. `sunrise` takes `minutes` from dark to `color` and stays there,
+for waking up to; `aurora` wanders back and forth through its `colors`, one wander taking about
+`period` seconds, and `fire` moves between `color` (the embers) and `flame`.
+
+```bash
+chsmartbulb effect lightning -c ffffff -s sky=200060 -s glow=0.2 -s gap=4
+chsmartbulb effect sunrise -s minutes=30
+```
+
 ### Sound-reactive effects
 
-`music`, `spectrum`, `volume`, `stereo`, `beathue`, `tempo`, `centroid`, `drop` and `ambient`
-analyse the audio on the computer, taken from the monitor of the default output. It does not matter
+`music`, `spectrum`, `volume`, `stereo`, `beathue`, `tempo`, `centroid`, `drop`, `ambient`, `bands`,
+`energy` and `chill` analyse the audio on the computer, taken from the monitor of the default output. It does not matter
 where the sound plays: laptop speakers, headphones, another Bluetooth device or the bulb itself.
 On Linux the capture needs the `parec` tool that comes with PulseAudio and PipeWire.
 
@@ -367,6 +396,12 @@ thresholds were tuned on synthetic signals, so on some music it flashes too ofte
 
 `ambient` is a calm `base` colour breathing every `period` seconds, with `accent` flashing on each
 beat. In silence it keeps breathing.
+
+`bands` shows the bass as `low` and the treble as `high`, each as bright as its band is loud; the
+two add up when both sound. `energy` looks back over `smoothing` seconds of music and takes the
+first of its `colors` for a calm passage and the last for an intense one, while the brightness
+follows the sound as it is. `chill` never flashes: its colour walks around the wheel every
+`period` seconds, and the brightness takes `smoothing` seconds to follow the loudness up or down.
 
 ```bash
 chsmartbulb effect tempo -s slow=70 -s fast=140
@@ -437,6 +472,11 @@ mss, which works on Windows, macOS and X11 but not on Wayland.
 brightness rises with the loudest band and falls back to `floor` at `release` per second, and the
 hue turns by up to `shift` degrees (60 at most), one way for bass-heavy sound and the other for
 bright sound.
+
+`screencut` is `screen` with a flash of the white LEDs whenever the picture changes abruptly, as
+at a cut in a film; `flash` is how bright it is and `decay` how fast it dies away. `screenhue`
+takes only the hue of the screen and shows it fully lit: a dark or grey picture keeps the last
+hue instead of dimming the room, which suits a light behind the monitor.
 
 ## Library
 
