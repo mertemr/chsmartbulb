@@ -495,7 +495,7 @@ mod gdi {
             if read == 0 {
                 return Err(failed("copying the desktop"));
             }
-            Ok(picture_color(pixels.chunks_exact(4).map(|bgrx| [bgrx[2], bgrx[1], bgrx[0]])))
+            Ok(picture_color(pixels.as_chunks::<4>().0.iter().map(|bgrx| [bgrx[2], bgrx[1], bgrx[0]])))
         }
     }
 }
