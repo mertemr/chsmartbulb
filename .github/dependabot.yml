@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # the workflows pin actions to commits; this is what moves the pins
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+    # leave a new release a week to be found bad
+    cooldown:
+      default-days: 7
