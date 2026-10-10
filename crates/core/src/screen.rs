@@ -223,6 +223,74 @@ pub fn screen_sound(
     }))
 }
 
+/// How far a channel of the screen's colour jumps between two looks when the scene cuts.
+const CUT: u8 = 48;
+
+/// Show the colour of the screen, and flash the white LEDs when the scene cuts.
+///
+/// The colour is that of [`screen_follow`]. `flash` (0..1) is how bright the flash is,
+/// `decay` how fast it dies away, per second.
+pub fn screen_cut(
+    source: Arc<ScreenSource>,
+    smoothing: f64,
+    saturation: f64,
+    white: f64,
+    balance: f64,
+    flash: f64,
+    decay: f64,
+) -> Result<Effect> {
+    check(smoothing, saturation, white, balance)?;
+    if !(0.0..=1.0).contains(&flash) {
+        return Err(invalid("flash must be within 0..1"));
+    }
+    if decay <= 0.0 {
+        return Err(invalid("decay must be positive"));
+    }
+    let mut seen = source.color();
+    let mut screen = followed(source.clone(), smoothing);
+    let mut burst = 0.0f64;
+    let mut last = 0.0;
+    Ok(Box::new(move |t| {
+        burst *= (-decay * (t - last).max(0.0)).exp();
+        last = t;
+        let now = source.color();
+        if now.r.abs_diff(seen.r).max(now.g.abs_diff(seen.g)).max(now.b.abs_diff(seen.b)) >= CUT {
+            burst = 1.0;
+        }
+        seen = now;
+        let (hue, colourfulness, value) = screen(t);
+        let color = Color::from_hsv(hue * 360.0, (colourfulness * saturation).min(1.0), value);
+        let color = balanced(color.with_white(white), balance);
+        let lift = round(255.0 * flash * burst) as u8;
+        Color::rgbw(color.r, color.g, color.b, color.w.max(lift))
+    }))
+}
+
+/// Below this colourfulness or value the screen has no hue worth taking.
+const HUELESS: (f64, f64) = (0.15, 0.08);
+/// The hue shown until the screen has had one: a warm orange.
+const FIRST_HUE: f64 = 25.0 / 360.0;
+
+/// Show only the hue of the screen, always fully lit: a dark or grey picture keeps the
+/// last hue instead of dimming the room.
+///
+/// `saturation` (0..1) is how colourful the light is; the rest goes to the white LEDs.
+pub fn screen_hue(source: Arc<ScreenSource>, smoothing: f64, saturation: f64, balance: f64) -> Result<Effect> {
+    check(smoothing, saturation, 1.0, balance)?;
+    if saturation > 1.0 {
+        return Err(invalid("saturation must be within 0..1"));
+    }
+    let mut screen = followed(source, smoothing);
+    let mut kept = FIRST_HUE;
+    Ok(Box::new(move |t| {
+        let (hue, colourfulness, value) = screen(t);
+        if colourfulness >= HUELESS.0 && value >= HUELESS.1 {
+            kept = hue;
+        }
+        balanced(Color::from_hsv(kept * 360.0, saturation, 1.0).with_white(1.0), balance)
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,6 +368,40 @@ mod tests {
             assert!(screen_sound(screen.clone(), audio.clone(), 0.2, 1.0, 1.0, 0.0, bad).is_err());
         }
         assert!(screen_sound(screen, audio, -1.0, 1.0, 1.0, 0.0, sway(0.3, 10.0)).is_err());
+    }
+
+    #[test]
+    fn a_cut_flashes_the_white_leds() {
+        let source = ScreenSource::new();
+        source.push(RED);
+        let mut effect = screen_cut(source.clone(), 0.0, 1.0, 0.0, 0.0, 0.5, 4.0).unwrap();
+        assert_eq!(effect(0.1), RED);
+        source.push(Color::rgb(255, 20, 0)); // the picture moving on is no cut
+        assert_eq!(effect(0.2), Color::rgb(255, 20, 0));
+        source.push(Color::rgb(0, 0, 255));
+        assert_eq!(effect(0.3), Color::rgbw(0, 0, 255, 128));
+        let fading = effect(0.55).w;
+        assert!((40..=55).contains(&fading), "{fading}"); // a quarter second of decay 4 leaves e^-1
+        assert_eq!(effect(10.0), Color::rgb(0, 0, 255));
+        assert!(screen_cut(source.clone(), 0.0, 1.0, 0.0, 0.0, 2.0, 4.0).is_err());
+        assert!(screen_cut(source, 0.0, 1.0, 0.0, 0.0, 0.5, 0.0).is_err());
+    }
+
+    #[test]
+    fn hue_stays_lit_when_the_screen_goes_dark() {
+        let source = ScreenSource::new();
+        let mut effect = screen_hue(source.clone(), 0.0, 1.0, 0.0).unwrap();
+        assert_eq!(effect(0.1), Color::rgb(255, 106, 0)); // nothing seen yet: the warm start
+        source.push(Color::rgb(0, 40, 0)); // dim, and green all the same
+        assert_eq!(effect(0.2), Color::rgb(0, 255, 0));
+        source.push(OFF);
+        assert_eq!(effect(0.3), Color::rgb(0, 255, 0));
+        source.push(Color::rgb(200, 200, 205)); // grey has no hue to take
+        assert_eq!(effect(0.4), Color::rgb(0, 255, 0));
+        let mut pale = screen_hue(source.clone(), 0.0, 0.5, 0.0).unwrap();
+        source.push(RED);
+        assert_eq!(pale(0.1), Color::rgbw(127, 0, 0, 128));
+        assert!(screen_hue(source, 0.0, 1.5, 0.0).is_err());
     }
 
     #[test]

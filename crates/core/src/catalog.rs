@@ -9,7 +9,7 @@ use serde_json::{json, Map, Value};
 
 use crate::audio::{self, AudioSource, DEFAULT_SENSITIVITY, MAX_DELAY};
 use crate::color::{parse_color, Color, BLUE, GREEN, RED, WHITE};
-use crate::effects::{self, Effect, EASINGS, MAX_STEPS, WARM};
+use crate::effects::{self, Effect, EASINGS, MAX_STEPS, MORNING, WARM};
 use crate::error::{invalid, Result};
 use crate::screen::{self, ScreenSource, Sway, MAX_SHIFT};
 
@@ -98,6 +98,7 @@ fn range(key: &str) -> (f64, f64, f64) {
         "slow" | "fast" => (40.0, 240.0, 1.0),
         "flash" => (0.1, 2.0, 0.05),
         "build" => (0.5, 10.0, 0.5),
+        "glow" | "power" => (0.0, 1.0, 0.01),
         _ => (0.0, 1.0, 0.01),
     }
 }
@@ -122,6 +123,17 @@ fn colour(params: &Resolved, key: &str) -> Color {
 
 fn audio(sources: &Sources, name: &str) -> Result<Arc<AudioSource>> {
     sources.audio.clone().ok_or_else(|| invalid(format!("effect {name:?} was given no audio source to follow")))
+}
+
+fn screen(sources: &Sources, name: &str) -> Result<Arc<ScreenSource>> {
+    sources.screen.clone().ok_or_else(|| invalid(format!("effect {name:?} was given no screen source to follow")))
+}
+
+fn colours<'a>(params: &'a Resolved, key: &str) -> &'a [Color] {
+    match params.get(key) {
+        Some(Param::Colors(colors)) => colors,
+        _ => unreachable!("{key} is a colour list"),
+    }
 }
 
 fn custom_steps() -> Vec<Value> {
@@ -193,10 +205,7 @@ pub static CATALOG: &[EffectInfo] = &[
                 ("fade_in", Param::Number(1.0)),
             ]
         },
-        build: |p, _| match p.get("colors") {
-            Some(Param::Colors(colors)) => effects::palette(colors, n(p, "hold"), n(p, "fade_in")),
-            _ => unreachable!("colors is a colour list"),
-        },
+        build: |p, _| effects::palette(colours(p, "colors"), n(p, "hold"), n(p, "fade_in")),
         ranges: &[],
     },
     EffectInfo {
@@ -207,6 +216,68 @@ pub static CATALOG: &[EffectInfo] = &[
         defaults: || vec![("period", Param::Number(1.0))],
         build: |p, _| effects::police(n(p, "period")),
         ranges: &[],
+    },
+    EffectInfo {
+        name: "aurora",
+        summary: "slow curtains of light wandering through a few colours",
+        needs: None,
+        also: None,
+        defaults: || {
+            vec![
+                (
+                    "colors",
+                    Param::Colors(vec![Color::rgb(0, 255, 80), Color::rgb(0, 200, 180), Color::rgb(128, 0, 255)]),
+                ),
+                ("period", Param::Number(20.0)),
+                ("depth", Param::Number(0.5)),
+            ]
+        },
+        build: |p, _| effects::aurora(colours(p, "colors"), n(p, "period"), n(p, "depth")),
+        ranges: &[("period", (2.0, 120.0, 1.0))],
+    },
+    EffectInfo {
+        name: "fire",
+        summary: "embers that flare up into flames",
+        needs: None,
+        also: None,
+        defaults: || {
+            vec![
+                ("color", Param::Color(Some(Color::rgb(255, 40, 0)))),
+                ("flame", Param::Color(Some(Color::rgb(255, 180, 0)))),
+                ("depth", Param::Number(0.6)),
+                ("speed", Param::Number(1.0)),
+            ]
+        },
+        build: |p, _| effects::fire(colour(p, "color"), colour(p, "flame"), n(p, "depth"), n(p, "speed")),
+        ranges: &[],
+    },
+    EffectInfo {
+        name: "lightning",
+        summary: "a dim sky, and strikes that flicker and die away",
+        needs: None,
+        also: None,
+        defaults: || {
+            vec![
+                ("color", Param::Color(Some(Color::rgbw(140, 170, 255, 255)))),
+                ("sky", Param::Color(Some(Color::rgb(30, 0, 255)))),
+                ("glow", Param::Number(0.1)),
+                ("power", Param::Number(1.0)),
+                ("gap", Param::Number(6.0)),
+            ]
+        },
+        build: |p, _| {
+            effects::lightning(colour(p, "color"), colour(p, "sky"), n(p, "glow"), n(p, "power"), n(p, "gap"))
+        },
+        ranges: &[("gap", (1.0, 30.0, 0.5))],
+    },
+    EffectInfo {
+        name: "sunrise",
+        summary: "from dark through red and orange to a warm morning light, then it stays",
+        needs: None,
+        also: None,
+        defaults: || vec![("color", Param::Color(Some(MORNING))), ("minutes", Param::Number(20.0))],
+        build: |p, _| effects::sunrise(colour(p, "color"), n(p, "minutes")),
+        ranges: &[("minutes", (1.0, 60.0, 1.0))],
     },
     EffectInfo {
         name: "custom",
@@ -427,6 +498,74 @@ pub static CATALOG: &[EffectInfo] = &[
         ranges: &[],
     },
     EffectInfo {
+        name: "bands",
+        summary: "the bass in one colour, the treble in another",
+        needs: Some(Needs::Audio),
+        also: None,
+        defaults: || {
+            vec![
+                ("low", Param::Color(Some(audio::BANDS_LOW))),
+                ("high", Param::Color(Some(audio::BANDS_HIGH))),
+                ("release", Param::Number(4.0)),
+                ("delay", Param::Number(0.0)),
+            ]
+        },
+        build: |p, s| {
+            audio::music_bands(audio(s, "bands")?, colour(p, "low"), colour(p, "high"), n(p, "release"), n(p, "delay"))
+        },
+        ranges: &[],
+    },
+    EffectInfo {
+        name: "energy",
+        summary: "the colour by how intense the music has been, calm to wild",
+        needs: Some(Needs::Audio),
+        also: None,
+        defaults: || {
+            vec![
+                ("colors", Param::Colors(audio::ENERGY_COLORS.to_vec())),
+                ("smoothing", Param::Number(4.0)),
+                ("floor", Param::Number(0.1)),
+                ("delay", Param::Number(0.0)),
+            ]
+        },
+        build: |p, s| {
+            audio::music_energy(
+                audio(s, "energy")?,
+                colours(p, "colors"),
+                n(p, "smoothing"),
+                n(p, "floor"),
+                n(p, "delay"),
+            )
+        },
+        ranges: &[("smoothing", (0.5, 20.0, 0.5))],
+    },
+    EffectInfo {
+        name: "chill",
+        summary: "a wandering colour that swells and sinks with the music, without flashing",
+        needs: Some(Needs::Audio),
+        also: None,
+        defaults: || {
+            vec![
+                ("period", Param::Number(30.0)),
+                ("saturation", Param::Number(1.0)),
+                ("floor", Param::Number(0.15)),
+                ("smoothing", Param::Number(1.5)),
+                ("delay", Param::Number(0.0)),
+            ]
+        },
+        build: |p, s| {
+            audio::music_chill(
+                audio(s, "chill")?,
+                n(p, "period"),
+                n(p, "saturation"),
+                n(p, "floor"),
+                n(p, "smoothing"),
+                n(p, "delay"),
+            )
+        },
+        ranges: &[("period", (2.0, 120.0, 1.0)), ("smoothing", (0.0, 5.0, 0.1))],
+    },
+    EffectInfo {
         name: "screen",
         summary: "follow the colour of the screen",
         needs: Some(Needs::Screen),
@@ -440,9 +579,13 @@ pub static CATALOG: &[EffectInfo] = &[
             ]
         },
         build: |p, s| {
-            let source =
-                s.screen.clone().ok_or_else(|| invalid("effect \"screen\" was given no screen source to follow"))?;
-            screen::screen_follow(source, n(p, "smoothing"), n(p, "saturation"), n(p, "white"), n(p, "balance"))
+            screen::screen_follow(
+                screen(s, "screen")?,
+                n(p, "smoothing"),
+                n(p, "saturation"),
+                n(p, "white"),
+                n(p, "balance"),
+            )
         },
         ranges: &[("saturation", (0.0, 3.0, 0.1))],
     },
@@ -464,10 +607,7 @@ pub static CATALOG: &[EffectInfo] = &[
             ]
         },
         build: |p, s| {
-            let source = s
-                .screen
-                .clone()
-                .ok_or_else(|| invalid("effect \"screensound\" was given no screen source to follow"))?;
+            let source = screen(s, "screensound")?;
             let sway =
                 Sway { floor: n(p, "floor"), release: n(p, "release"), shift: n(p, "shift"), delay: n(p, "delay") };
             screen::screen_sound(
@@ -481,6 +621,47 @@ pub static CATALOG: &[EffectInfo] = &[
             )
         },
         ranges: &[("saturation", (0.0, 3.0, 0.1)), ("shift", (0.0, MAX_SHIFT, 1.0))],
+    },
+    EffectInfo {
+        name: "screencut",
+        summary: "the colour of the screen, with a flash when the scene cuts",
+        needs: Some(Needs::Screen),
+        also: None,
+        defaults: || {
+            vec![
+                ("smoothing", Param::Number(0.2)),
+                ("saturation", Param::Number(1.5)),
+                ("white", Param::Number(1.0)),
+                ("balance", Param::Number(0.0)),
+                ("flash", Param::Number(0.6)),
+                ("decay", Param::Number(6.0)),
+            ]
+        },
+        build: |p, s| {
+            screen::screen_cut(
+                screen(s, "screencut")?,
+                n(p, "smoothing"),
+                n(p, "saturation"),
+                n(p, "white"),
+                n(p, "balance"),
+                n(p, "flash"),
+                n(p, "decay"),
+            )
+        },
+        ranges: &[("saturation", (0.0, 3.0, 0.1)), ("flash", (0.0, 1.0, 0.05))],
+    },
+    EffectInfo {
+        name: "screenhue",
+        summary: "only the hue of the screen, fully lit even when the picture is dark",
+        needs: Some(Needs::Screen),
+        also: None,
+        defaults: || {
+            vec![("smoothing", Param::Number(1.0)), ("saturation", Param::Number(1.0)), ("balance", Param::Number(0.0))]
+        },
+        build: |p, s| {
+            screen::screen_hue(screen(s, "screenhue")?, n(p, "smoothing"), n(p, "saturation"), n(p, "balance"))
+        },
+        ranges: &[],
     },
 ];
 
@@ -664,10 +845,21 @@ mod tests {
     }
 
     #[test]
+    fn every_effect_builds_from_its_defaults_and_plays() {
+        let sources = Sources { audio: Some(AudioSource::new(audio::monotonic())), screen: Some(ScreenSource::new()) };
+        for info in CATALOG {
+            let mut effect = create(info.name, None, &sources).unwrap_or_else(|error| panic!("{}: {error}", info.name));
+            for frame in 0..100 {
+                effect(frame as f64 * 0.05);
+            }
+        }
+    }
+
+    #[test]
     fn describe_is_plain_data_covering_every_effect() {
         let described = describe();
         let all = described.as_array().unwrap();
-        assert_eq!(all.len(), 19);
+        assert_eq!(all.len(), 28);
         let names: Vec<&str> = all.iter().map(|e| e["name"].as_str().unwrap()).collect();
         assert_eq!(
             names,
@@ -679,6 +871,10 @@ mod tests {
                 "candle",
                 "palette",
                 "police",
+                "aurora",
+                "fire",
+                "lightning",
+                "sunrise",
                 "custom",
                 "music",
                 "spectrum",
@@ -689,10 +885,23 @@ mod tests {
                 "centroid",
                 "drop",
                 "ambient",
+                "bands",
+                "energy",
+                "chill",
                 "screen",
-                "screensound"
+                "screensound",
+                "screencut",
+                "screenhue"
             ]
         );
+        let of = |name: &str| all.iter().find(|e| e["name"] == name).unwrap();
+        assert_eq!(of("lightning")["params"]["color"], "#8caaffff");
+        assert_eq!(of("lightning")["schema"]["gap"], json!({"type": "number", "min": 1.0, "max": 30.0, "step": 0.5}));
+        assert_eq!(of("sunrise")["schema"]["minutes"]["max"], 60.0);
+        assert_eq!(of("energy")["schema"]["colors"], json!({"type": "colors"}));
+        assert_eq!((&of("energy")["needs"], &of("screencut")["needs"]), (&json!("audio"), &json!("screen")));
+        assert_eq!(of("screencut")["schema"]["flash"]["max"], 1.0); // not the seconds that drop's flash lasts
+        assert_eq!(of("screenhue")["schema"]["saturation"]["max"], 1.0);
         let range = |key: &str| all.iter().find_map(|e| e["schema"].get(key)).unwrap().clone();
         assert_eq!(range("slow"), json!({"type": "number", "min": 40.0, "max": 240.0, "step": 1.0}));
         assert_eq!(range("fast"), json!({"type": "number", "min": 40.0, "max": 240.0, "step": 1.0}));

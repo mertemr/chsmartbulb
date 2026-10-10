@@ -198,6 +198,134 @@ pub fn custom(steps: &[Value], speed: f64) -> Result<Effect> {
     Ok(Box::new(move |t| played(t * speed)))
 }
 
+/// The colour `x` (0..1) of the way along `colors`, blending between neighbours.
+pub(crate) fn along(colors: &[Color], x: f64) -> Color {
+    let Some(&last) = colors.last() else { return OFF };
+    let place = x.clamp(0.0, 1.0) * (colors.len() - 1) as f64;
+    let index = place.floor() as usize;
+    match colors.get(index + 1) {
+        Some(next) => colors[index].mix(next, place - index as f64),
+        None => last,
+    }
+}
+
+/// Slow curtains of light wandering back and forth through `colors`.
+///
+/// `period` is roughly how long one wander takes; `depth` (0..1) is how far the light dims
+/// as it goes.
+pub fn aurora(colors: &[Color], period: f64, depth: f64) -> Result<Effect> {
+    if colors.is_empty() {
+        return Err(invalid("colors must not be empty"));
+    }
+    if period <= 0.0 {
+        return Err(invalid("period must be positive"));
+    }
+    if !(0.0..=1.0).contains(&depth) {
+        return Err(invalid("depth must be within 0..1"));
+    }
+    let colors = colors.to_vec();
+    Ok(Box::new(move |t| {
+        // sines with unrelated frequencies, as the candle uses: the drift never quite repeats
+        let a = 2.0 * PI * t / period;
+        let place = 0.5 + 0.3 * a.sin() + 0.2 * (0.37 * a + 1.7).sin();
+        let dip = 0.5 + 0.3 * (2.3 * a + 0.4).sin() + 0.2 * (5.1 * a).sin();
+        along(&colors, place).scaled(1.0 - depth * dip)
+    }))
+}
+
+/// A fire: glowing `embers` that flare up into `flame`, never the same twice.
+///
+/// `depth` (0..1) is how far it dies down between flares, `speed` multiplies its pace.
+pub fn fire(embers: Color, flame: Color, depth: f64, speed: f64) -> Result<Effect> {
+    if !(0.0..=1.0).contains(&depth) {
+        return Err(invalid("depth must be within 0..1"));
+    }
+    if speed <= 0.0 {
+        return Err(invalid("speed must be positive"));
+    }
+    Ok(Box::new(move |t| {
+        let t = t * speed;
+        let flicker = ((9.1 * t).sin() + (15.7 * t + 1.3).sin() + (31.3 * t + 0.5).sin()) / 3.0;
+        let swell = (1.3 * t).sin() * (0.7 * t + 2.1).sin(); // the slow rise and fall of the whole fire
+        let heat = (0.5 + 0.3 * swell + 0.2 * flicker).clamp(0.0, 1.0);
+        embers.mix(&flame, heat * heat).scaled(1.0 - depth * (1.0 - heat))
+    }))
+}
+
+/// How fast a stroke of lightning fades, per second.
+const BOLT_DECAY: f64 = 14.0;
+/// The most strokes in one strike.
+const MAX_STROKES: usize = 4;
+
+/// Numbers that look random and are the same on every run: xorshift, 0..1.
+struct Dice(u64);
+
+impl Dice {
+    fn roll(&mut self) -> f64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        (self.0 >> 11) as f64 / (1u64 << 53) as f64
+    }
+}
+
+/// A thunderstorm: a dim `sky`, and strikes of `bolt` that flicker a few times and die away.
+///
+/// `glow` (0..1) is how bright the sky stays between strikes and `power` (0..1) how bright
+/// a strike is. Strikes come `gap` seconds apart on average, at uneven intervals.
+pub fn lightning(bolt: Color, sky: Color, glow: f64, power: f64, gap: f64) -> Result<Effect> {
+    if !(0.0..=1.0).contains(&glow) {
+        return Err(invalid("glow must be within 0..1"));
+    }
+    if !(0.0..=1.0).contains(&power) {
+        return Err(invalid("power must be within 0..1"));
+    }
+    if gap <= 0.0 {
+        return Err(invalid("gap must be positive"));
+    }
+    let sky = sky.scaled(glow);
+    let mut dice = Dice(0x9E37_79B9_7F4A_7C15);
+    let mut next = gap * 0.3; // the first strike comes soon, to show what was chosen
+    let mut strokes: Vec<(f64, f64)> = Vec::with_capacity(MAX_STROKES); // when, how strong
+    Ok(Box::new(move |t| {
+        if t >= next {
+            strokes.clear();
+            let count = 1 + (dice.roll() * MAX_STROKES as f64) as usize;
+            let mut at = t;
+            for stroke in 0..count.min(MAX_STROKES) {
+                // the first stroke is the full one, the echoes are weaker
+                strokes.push((at, if stroke == 0 { 1.0 } else { 0.4 + 0.5 * dice.roll() }));
+                at += 0.06 + 0.12 * dice.roll();
+            }
+            next = at + gap * (0.3 + 1.4 * dice.roll());
+        }
+        let level = strokes
+            .iter()
+            .filter(|(at, _)| t >= *at)
+            .map(|(at, strength)| strength * (-BOLT_DECAY * (t - at)).exp())
+            .fold(0.0, f64::max);
+        sky.mix(&bolt, level * power)
+    }))
+}
+
+/// Where a sunrise starts and what it passes on the way to its last colour.
+const DAWN: [Color; 2] = [Color::rgb(255, 20, 0), Color::rgb(255, 90, 0)];
+/// The light a sunrise ends on: warm, with the white LEDs.
+pub const MORNING: Color = Color::rgbw(255, 150, 40, 255);
+
+/// A sunrise: from dark through deep red and orange to `color`, over `minutes`, then it stays.
+pub fn sunrise(color: Color, minutes: f64) -> Result<Effect> {
+    if minutes <= 0.0 {
+        return Err(invalid("minutes must be positive"));
+    }
+    let stages = [DAWN[0], DAWN[1], color];
+    Ok(Box::new(move |t| {
+        let risen = (t / (minutes * 60.0)).clamp(0.0, 1.0);
+        // squared: the eye takes the first light for more than it is
+        along(&stages, risen).scaled(risen * risen)
+    }))
+}
+
 /// Black, for effects that have nothing to show.
 pub fn dark() -> Effect {
     solid(OFF)
@@ -235,6 +363,66 @@ mod tests {
             custom(&[json!({"color": "red", "hold": 1}), json!({"color": "blue", "hold": 1})], 2.0).unwrap();
         assert_eq!(effect(0.25), RED);
         assert_eq!(effect(0.75), BLUE);
+    }
+
+    #[test]
+    fn along_blends_between_neighbours() {
+        assert_eq!(along(&[RED, GREEN, BLUE], 0.0), RED);
+        assert_eq!(along(&[RED, GREEN, BLUE], 0.5), GREEN);
+        assert_eq!(along(&[RED, GREEN, BLUE], 0.75), Color::rgb(0, 128, 128));
+        assert_eq!(along(&[RED, GREEN, BLUE], 7.0), BLUE);
+        assert_eq!(along(&[RED], 0.3), RED);
+    }
+
+    #[test]
+    fn aurora_stays_within_its_colours_and_depth() {
+        let mut effect = aurora(&[GREEN, BLUE], 10.0, 0.5).unwrap();
+        for frame in 0..2000 {
+            let color = effect(frame as f64 * 0.05);
+            assert_eq!(color.r, 0);
+            assert!(color.g.max(color.b) >= 63, "{color:?}"); // half of the dimmer end of a blend
+        }
+        assert!(aurora(&[], 10.0, 0.5).is_err());
+        assert!(aurora(&[RED], 0.0, 0.5).is_err());
+    }
+
+    #[test]
+    fn fire_moves_between_embers_and_flame() {
+        let (embers, flame) = (Color::rgb(255, 40, 0), Color::rgb(255, 180, 0));
+        let mut effect = fire(embers, flame, 0.5, 1.0).unwrap();
+        let greens: Vec<u8> = (0..400).map(|frame| effect(frame as f64 * 0.05).g).collect();
+        assert!(greens.iter().all(|&g| (1..=180).contains(&g)));
+        assert!(greens.iter().max().unwrap() - greens.iter().min().unwrap() > 60); // it does move
+        assert!(fire(embers, flame, 0.5, 0.0).is_err());
+    }
+
+    #[test]
+    fn lightning_strikes_out_of_a_dim_sky() {
+        let (bolt, sky) = (Color::rgbw(0, 0, 0, 255), BLUE);
+        let mut effect = lightning(bolt, sky, 0.2, 1.0, 2.0).unwrap();
+        assert_eq!(effect(0.0), Color::rgb(0, 0, 51)); // the sky alone before the first strike
+        let frames: Vec<Color> = (1..1200).map(|frame| effect(frame as f64 * 0.05)).collect();
+        let strikes = frames.windows(2).filter(|pair| pair[0].w < 128 && pair[1].w >= 128).count();
+        assert!((10..=60).contains(&strikes), "{strikes} strikes in a minute"); // about one every two seconds
+        assert!(frames.iter().filter(|color| **color == Color::rgb(0, 0, 51)).count() > 200); // and dark in between
+        let mut weak = lightning(bolt, sky, 0.0, 0.5, 2.0).unwrap();
+        assert_eq!(weak(0.0), OFF);
+        assert!((0..1200).map(|frame| weak(frame as f64 * 0.05).w).max().unwrap() <= 128);
+        assert!(lightning(bolt, sky, 0.2, 1.0, 0.0).is_err());
+        assert!(lightning(bolt, sky, 1.2, 1.0, 2.0).is_err());
+    }
+
+    #[test]
+    fn sunrise_rises_once_and_stays() {
+        let mut effect = sunrise(MORNING, 1.0).unwrap();
+        assert_eq!(effect(0.0), OFF);
+        let early = effect(6.0);
+        assert!(early.r > 0 && early.r < 10 && early.w == 0, "{early:?}"); // a faint deep red
+        let levels: Vec<u8> = (0..=60).map(|second| effect(second as f64).r).collect();
+        assert!(levels.windows(2).all(|pair| pair[0] <= pair[1])); // never falls back
+        assert_eq!(effect(60.0), MORNING);
+        assert_eq!(effect(3600.0), MORNING);
+        assert!(sunrise(MORNING, 0.0).is_err());
     }
 
     #[test]
