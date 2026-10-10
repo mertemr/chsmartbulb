@@ -4,85 +4,106 @@
 
 Control the CHSmartBulb / BL08A Bluetooth speaker bulb from a computer, without the vendor app.
 
-The app (CHSmartBulb) no longer runs on current phones, which leaves these bulbs stuck on whatever
-colour they had last. This project documents the bulb's protocol and provides a background
-service, an app, a web interface, a command line tool and a Python library for it.
+The vendor app (CHSmartBulb) no longer runs on current phones, which leaves these bulbs stuck on
+whatever colour they had last. This project replaces it: an app for Android, Linux and Windows, a
+background service with a web interface, a command line tool and a Python library, all built on
+the bulb's protocol, which was worked out and documented here.
 
 ## What works
 
 - RGB colour, the separate white LEDs, brightness, on/off, soft fades
 - The 13 effects built into the bulb, including its sound-reactive mode
-- Your own effects, generated on the computer and streamed to the bulb, including ones that
-  follow whatever audio the computer is playing
-- A background service (`chsmartbulbd`, one Rust program) that keeps the connection, runs effects
-  and restores the light when the bulb comes back after losing power
+- 19 more effects, generated on the computer or phone and streamed to the bulb: patterns, a step
+  editor for your own, nine that follow the music, and two that follow the colour of a screen
+- A background service (`chsmartbulbd`, one Rust program for Linux and Windows) that keeps the
+  connection, runs effects and restores the light when the bulb comes back after losing power
 - A web interface served by that service, for phones and other computers on the network
+- An app for Android, Linux and Windows that needs nothing else running
 - Control from other machines on the network, with agents so the light can follow the music or
   the screen of a computer that has no Bluetooth
+- Dimming or switching off while the computer is locked or asleep
 - Reading the name, model, colour and stored timers; enabling and disabling timers
 - Bluetooth Classic (RFCOMM) and BLE transports
 
 Colour temperature is not supported by the hardware.
 
-## Web interface
+## The interface
 
-`chsmartbulbd --web 8378` serves a page for phones and other computers on the network; see
-[the usage notes](docs/usage.md#web-interface).
+The app and the page that `chsmartbulbd --web 8378` serves are the same interface: the light is in
+one of five modes (a colour, a pattern, the sound, the screen, an effect of the bulb's own), and
+the page says whose sound or screen it follows.
 
 <p>
-  <img src="docs/images/web-desktop.png" alt="The web interface on a wide screen: brightness, connections and the colour wheel" width="100%">
+  <img src="docs/images/web-desktop.png" alt="The interface on a wide screen, the light following a screen and the sound of two other computers" width="100%">
 </p>
 <p>
-  <img src="docs/images/web-colour.png" alt="Choosing a colour on a phone" width="32%">
-  <img src="docs/images/web-custom.png" alt="Editing the steps of a custom effect" width="32%">
-  <img src="docs/images/web-sound.png" alt="The effects that follow the sound" width="32%">
+  <img src="docs/images/web-colour.png" alt="Choosing a colour on a phone" width="24%">
+  <img src="docs/images/web-custom.png" alt="Editing the steps of a custom effect" width="24%">
+  <img src="docs/images/web-sound.png" alt="The effects that follow the sound" width="24%">
+  <img src="docs/images/web-screen.png" alt="Following a screen and the sound, with the monitor to follow" width="24%">
 </p>
 
-## App
+## What is in here
 
-`app/` is a desktop and mobile app (Android, Linux, Windows) with the same interface. It talks to
-the bulb itself over BLE or Bluetooth Classic, so a phone can drive the bulb with nothing else
-running, and its sound effects can follow what the phone plays while the sound goes to another
-speaker. Builds come from the [`app` workflow](.github/workflows/app.yml); see
-[docs/app.md](docs/app.md).
+| | |
+|---|---|
+| The app ([docs/app.md](docs/app.md)) | Android, Linux, Windows. Talks to the bulb itself over BLE or Bluetooth Classic, so a phone drives it with nothing else running, and can follow what the phone plays. |
+| `chsmartbulbd` ([docs/usage.md](docs/usage.md#background-service)) | The background service for a computer, Linux or Windows: holds the bulb, plays the effects, serves the web interface and takes other machines in. |
+| `chsmartbulb` ([docs/usage.md](docs/usage.md#command-line)) | The command line, in Python: drives a service, here or on another machine, or the bulb itself; also the agents that send a computer's sound or screen to a service. |
+| The Python library ([docs/usage.md](docs/usage.md#library)) | The bulb from your own code. |
+| The protocol ([docs/protocol.md](docs/protocol.md)) | What the bulb understands, for anyone writing their own. |
+
+The service, the effects and the protocol are written once, in Rust ([`crates/core`](crates/core)),
+and the app, `chsmartbulbd` and the Python package all use that one implementation.
 
 ## Install
 
-The service and the app come ready-made with every
-[release](https://github.com/mertemr/chsmartbulb/releases): `chsmartbulbd` for Linux and Windows,
-the app for Android, Linux and Windows.
+Every [release](https://github.com/mertemr/chsmartbulb/releases) carries the app (an APK, Linux
+packages, Windows installers), `chsmartbulbd` for Linux and Windows, and the Python package as a
+wheel. Bluetooth Classic needs the bulb paired first; BLE does not.
 
-The command line and the Python library need Linux with BlueZ, a paired bulb, and Python 3.10 or
-newer with Bluetooth socket support:
+The command line needs Python 3.10 or newer:
+
+```bash
+pip install "chsmartbulb @ git+https://github.com/mertemr/chsmartbulb"
+```
+
+That is enough to drive a service and, with the `audio` or `screen` extra, to run an agent, on
+Linux and Windows alike. Reaching the bulb without a service needs Linux with BlueZ and a Python
+with Bluetooth sockets (the `ble` extra adds the BLE transport), and playing effects without one
+needs [`chsmartbulb-native`](crates/python), the Rust core as a Python module.
+
+From a checkout, with Rust and [uv](https://docs.astral.sh/uv/):
 
 ```bash
 git clone https://github.com/mertemr/chsmartbulb.git
 cd chsmartbulb
-uv sync
 cargo build --release -p chsmartbulb-daemon   # the service, target/release/chsmartbulbd
+uv sync                                       # the command line, as `uv run chsmartbulb`
+uv pip install ./crates/python                # optional: chsmartbulb-native
 ```
 
 Python builds downloaded by `uv` are compiled without Bluetooth sockets, so the project is set up
-to use the system interpreter. Add `--extra audio` or `--extra screen` for the agents that feed a
-service the sound or the screen of another computer, and `--extra ble` for the BLE transport.
-
-The effects are written once, in Rust. The service and the app carry them; the Python package
-plays them too once `uv pip install ./crates/python` (which needs a Rust toolchain) has put
-`chsmartbulb-native` next to it.
+to use the system interpreter.
 
 ## Quick start
 
 ```bash
 mkdir -p ~/.config/chsmartbulb
 echo CHSMARTBULB_ADDRESS=AA:BB:CC:DD:EE:FF > ~/.config/chsmartbulb/config
-uv run chsmartbulb color red
-uv run chsmartbulb rgb 0 80 255 --brightness 40 --fade
-chsmartbulbd &                                # the background service
-uv run chsmartbulb effect hue --period 10
+chsmartbulbd --web 127.0.0.1:8378 --no-token &   # the service; the page is at http://localhost:8378
+chsmartbulb color red
+chsmartbulb rgb 0 80 255 --brightness 40 --fade
+chsmartbulb effect hue --period 10
+chsmartbulb effect music
 ```
 
-With `chsmartbulbd` running, the commands go through it: they return at once, effects keep
-playing, and the light state is remembered.
+The commands go through the service: they return at once, effects keep playing, and the light
+state is remembered. To open the page to the network, give the service a token
+([docs/usage.md](docs/usage.md#other-machines)). Without a service the command line talks to the
+bulb itself, one connection per command.
+
+The library:
 
 ```python
 import asyncio
@@ -107,10 +128,11 @@ dismissed as dummies. Every claim in the protocol document was checked on a real
 light measured by a webcam, and is marked as measured, read back, or only seen in someone else's
 capture.
 
+- [docs/usage.md](docs/usage.md): the service, the command line, the effects, the library
+- [docs/app.md](docs/app.md): the app
 - [docs/protocol.md](docs/protocol.md): frame format, commands, effects, open questions
 - [docs/device.md](docs/device.md): services, connection behaviour, BLE on Linux
 - [docs/research.md](docs/research.md): the experiments and the guesses that turned out wrong
-- [docs/app.md](docs/app.md): the app and the Rust core
 - [research/](research): the scripts and raw results behind the above
 
 ## Tests
@@ -118,6 +140,7 @@ capture.
 ```bash
 cargo test --workspace
 uv run pytest
+pnpm --dir web test
 ```
 
 The tests need no hardware; they run against a simulated bulb that behaves like the real one.
@@ -131,7 +154,8 @@ Earlier work on these bulbs that this project started from:
 [roelderickx/bluetooth-smartbulb](https://github.com/roelderickx/bluetooth-smartbulb).
 
 The picture of the bulb is the sellers' product picture, as kept in the first and third of those
-repositories. The screenshots are of the web interface driving a simulated bulb.
+repositories. The screenshots are of the web interface driving a simulated bulb
+(`chsmartbulbd --simulate`).
 
 ## License
 
