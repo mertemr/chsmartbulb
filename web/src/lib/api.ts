@@ -34,6 +34,7 @@ export type State = {
   localMonitors?: { index: number; width: number; height: number }[] // the service's own screens, when it can capture
   localMonitor?: number
   localScreenAsks?: boolean // the service's desktop has its user choose the screen (Wayland); `monitor` makes it ask again
+  localApp?: string | null // the one program whose sound the service follows, where it can single one out; null is everything
   watchers: number // clients following the state, this page included
 }
 

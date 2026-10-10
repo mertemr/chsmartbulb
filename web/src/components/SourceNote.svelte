@@ -1,6 +1,7 @@
 <script lang="ts">
   import { app } from '../lib/app.svelte'
   import { feedOf } from '../lib/sources'
+  import AppPicker from './AppPicker.svelte'
   import MonitorPicker from './MonitorPicker.svelte'
 
   // Where the sound or the screen comes from, and how to bring it in from another computer.
@@ -58,4 +59,6 @@
 {/if}
 {#if kind === 'screen'}
   <MonitorPicker />
+{:else}
+  <AppPicker />
 {/if}
