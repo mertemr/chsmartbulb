@@ -6,7 +6,8 @@ name: app
 
 on:
   push:
-    branches: ["**"]
+    # other branches are built by their pull request
+    branches: [main]
     # the paths below are not looked at for a tag
     tags: ["v*"]
     paths: ["crates/**", "app/**", "web/**", "src/**", "tests/**", "pyproject.toml", "uv.lock", "Cargo.*", ".github/workflows/app.yml"]
@@ -18,7 +19,7 @@ permissions:
   contents: read
 
 concurrency:
-  # a push to a branch with a pull request and the pull request's own run share one group
+  # a newer push to a pull request or to main replaces the run before it
   group: app-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
