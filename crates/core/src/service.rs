@@ -1,8 +1,7 @@
 //! The background service: keeps the connection, the running effect and the remembered state.
 //!
-//! A port of `chsmartbulb.service.BulbService`. Requests and replies are the same JSON
-//! objects as the Python service's socket protocol, so the web interface and the
-//! agents talk to either one without knowing which.
+//! Requests and replies are the JSON objects of the socket protocol (`docs/usage.md`),
+//! which is all the web interface, the command line and the agents know of it.
 
 use std::collections::HashMap;
 use std::path::PathBuf;

@@ -1,4 +1,4 @@
-//! The service on the network, as `chsmartbulb daemon --listen PORT --web PORT` offers it.
+//! The service on the network, as `chsmartbulbd --listen PORT --web PORT` offers it.
 //!
 //! The listeners all speak the socket protocol through a [`Session`]:
 //!
@@ -7,9 +7,6 @@
 //! - [`serve_local`]: the same lines over a Unix socket, for this machine's command line;
 //! - [`serve_web`]: the web interface's files and the same objects over a WebSocket at
 //!   `/ws` (usually port 8378).
-//!
-//! A port of `chsmartbulb.web` and the TCP part of `chsmartbulb.service`, so the Python
-//! tools cannot tell the app from the Python service.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;

@@ -40,46 +40,44 @@ the token, so keep it readable by you alone.
 | `timers` | List schedule entries stored in the bulb |
 | `timer INDEX on\|off` | Enable or disable a stored entry |
 | `raw HEX` | Send one raw frame; prints the answer to a query |
-| `daemon [--listen [HOST:]PORT]` | Run the background service |
 | `audio-agent` | Analyse this machine's audio and feed it to a service |
 | `screen-agent` | Watch this machine's screen and feed its colour to a service |
 
-`--host HOST[:PORT]` sends any command to a service on another machine instead.
+Commands go to the [background service](#background-service) when one runs on this machine, and
+`--host HOST[:PORT]` sends them to a service on another machine instead.
 
-Without the service every invocation is a separate connection. The bulb does not report
-brightness and forgets nothing but the colour mix, so in that mode `on` after `off` comes back
-white and an effect runs only as long as the command does.
+Without a service every invocation is a separate connection to the bulb. The bulb does not report
+brightness and forgets everything but the colour mix, so in that mode `on` after `off` comes back
+white, `brightness` dims the colour the bulb reports, and an effect runs only as long as the
+command does. The effects themselves live in the Rust core: playing one without a service needs
+[`chsmartbulb-native`](../crates/python), which brings that core to Python.
 
 ## Background service
 
-```bash
-chsmartbulb daemon
-```
-
-The service keeps the connection open, runs effects in the background and remembers the light
-state (colour, brightness, on/off, effect). While it runs, the other commands talk to it instead
-of the bulb, which makes them fast and lets `effect` return immediately.
-
-`chsmartbulbd` is the same service as one Rust program, with no Python or numpy to install:
+`chsmartbulbd` keeps the connection open, runs effects in the background and remembers the light
+state (colour, brightness, on/off, effect). While it runs, the commands above talk to it instead
+of the bulb, which makes them fast and lets `effect` return immediately. It is one Rust program,
+with no Python to install; a [release](https://github.com/mertemr/chsmartbulb/releases) carries
+it for Linux and Windows, or build it:
 
 ```bash
 cargo build --release -p chsmartbulb-daemon      # target/release/chsmartbulbd
 chsmartbulbd --address AA:BB:CC:DD:EE:FF --listen 8377 --web 8378 --token SECRET
 ```
 
-It takes the daemon's options (`--address`, `--transport`, `--channel`, `--socket`, `--listen`,
-`--web`, `--token`, `--no-token`, `--fps`, `--no-state`, `--mic`, `--audio-device`, `--monitor`,
-`--on-lock`, `--on-sleep`), uses the same socket and state file, and the commands above talk to
-it as they do to `chsmartbulb daemon`; `chsmartbulbd --help` lists them. There is no
-`--audio-backend`: Linux captures with `parec`, Windows through WASAPI. It follows its own screen
-on Windows and on an X11 desktop (`--monitor`). In a Wayland session nobody may read the picture
-unasked, so the service has the desktop share a screen, as screen sharing in a call does: the
-first `screen` effect brings up the desktop's question about which screen, the answer is
-remembered, and `--choose-screen` makes it ask again. That part needs the PipeWire headers and
-libclang to build (`libpipewire-0.3-dev libclang-dev` on Debian and Ubuntu, `pipewire clang` on
-Arch); `--no-default-features` builds without it. `--on-lock` and `--on-sleep` work
-on Linux (through logind) as well as on Windows. `--simulate` serves a simulated bulb for trying
-things without one.
+It reads the [settings file](#command-line) the command line reads, so the address and the token
+can stay there. `chsmartbulbd --help` lists its options: `--address`, `--transport`, `--channel`,
+`--socket`, `--listen`, `--web`, `--token`, `--no-token`, `--fps`, `--no-state`, `--mic`,
+`--audio-device`, `--monitor`, `--choose-screen`, `--on-lock`, `--on-sleep`, `--simulate`.
+
+It listens to the sound itself, with `parec` on Linux and through WASAPI on Windows, and follows
+its own screen on Windows and on an X11 desktop (`--monitor`). In a Wayland session nobody may
+read the picture unasked, so the service has the desktop share a screen, as screen sharing in a
+call does: the first `screen` effect brings up the desktop's question about which screen, the
+answer is remembered, and `--choose-screen` makes it ask again. That part needs the PipeWire
+headers and libclang to build (`libpipewire-0.3-dev libclang-dev` on Debian and Ubuntu,
+`pipewire clang` on Arch); `--no-default-features` builds without it. `--simulate` serves a
+simulated bulb for trying things without one.
 
 - If the bulb loses power or goes out of range, the service keeps retrying and puts the
   remembered state back when the bulb returns. Requests made in the meantime are applied then.
@@ -87,10 +85,12 @@ things without one.
   (`--no-state` turns that off).
 - It listens on `$XDG_RUNTIME_DIR/chsmartbulb.sock` (`--socket` changes it). `--direct` makes a
   command bypass the service, which only works when the service is not holding the connection.
+- Windows has no such socket: there the service needs `--listen` or `--web`, and the command line
+  reaches it with `--host localhost`.
 
 To start it with your session, copy [`contrib/chsmartbulb.service`](../contrib/chsmartbulb.service)
-to `~/.config/systemd/user/`, fill in the address and the path (`chsmartbulb daemon` takes the
-address from the settings file instead; `chsmartbulbd` does not read that file), then:
+to `~/.config/systemd/user/`, fill in the path (and the address, unless the settings file has
+it), then:
 
 ```bash
 systemctl --user enable --now chsmartbulb
@@ -103,7 +103,7 @@ machine's service. Start the service with a network port and a shared secret:
 
 ```bash
 export CHSMARTBULB_TOKEN=$(python3 -c "import secrets; print(secrets.token_urlsafe(16))")
-chsmartbulb daemon --listen 8377
+chsmartbulbd --listen 8377
 ```
 
 From anywhere else on the network, with the same token:
@@ -123,7 +123,7 @@ colour, the white LEDs, brightness, every effect with its parameters, the bulb's
 the device details.
 
 ```bash
-chsmartbulb daemon --web 8378
+chsmartbulbd --web 8378
 ```
 
 Open `http://laptop.local:8378` and enter the token once; the browser keeps it. Every open page
@@ -143,23 +143,22 @@ or screen is being followed and how to bring an agent in; the device section lis
 connection, agents and other open pages included.
 
 The page is a static bundle of about 30 kB that holds no logic of the service. It is built from
-[`web/`](../web) (Svelte, Tailwind) and the result is kept in `src/chsmartbulb/webui`, so nothing
-but Python is needed to run it. To work on it:
+[`web/`](../web) (Svelte, Tailwind) and the result is kept in `web/bundle`, which `chsmartbulbd`
+and the app carry inside them. To work on it:
 
 ```bash
 cd web
 pnpm install
-pnpm dev      # hot reload on :5173, talking to a daemon started with --web 8378
-pnpm build    # writes src/chsmartbulb/webui
+pnpm dev      # hot reload on :5173, talking to a service started with --web 8378
+pnpm build    # writes web/bundle
 ```
 
 The page talks to the service over a WebSocket at `/ws`, where each text message is one object of
 the [socket protocol](#socket-protocol) below, starting with `auth`. Anything that serves the
 same files and answers that protocol can host it, which is what keeps a port of the service to a
-microcontroller possible. The server side is in `chsmartbulb.web` and uses the standard library
-only.
+microcontroller possible. The server side is `server.rs` in [`crates/core`](../crates/core).
 
-### When the computer locks, sleeps or shuts down (Windows)
+### When the computer locks, sleeps or shuts down
 
 The service can follow the computer it runs on. `--on-lock dim|off` sets what the light does
 while the screen is locked, `--on-sleep dim|off` while the computer sleeps or shuts down; the
@@ -167,17 +166,18 @@ light goes back to what it showed, effect included, when the screen is unlocked 
 wakes. Both default to `none`. Anything that changes the light (a page, a command) ends the away
 state, and the running effect, and with it the sound or screen capture, stops while it lasts.
 A locked screen dims to 10 %. Sleep leaves about a second to reach the bulb; if the write does not
-make it, the plan is restored after waking all the same.
+make it, the plan is restored after waking all the same. It works on Linux (through logind) and
+on Windows.
 
 ```bash
-chsmartbulb -t ble daemon --listen 8377 --web 0.0.0.0:8378 --on-lock dim --on-sleep off
+chsmartbulbd -t ble --listen 8377 --web 0.0.0.0:8378 --on-lock dim --on-sleep off
 ```
 
-To start it when you log in, a scheduled task does (put the token and the address in the settings
-file rather than in the command):
+To start it when you log in on Windows, a scheduled task does (put the token and the address in
+the settings file rather than in the command):
 
 ```powershell
-schtasks /Create /TN chsmartbulb /SC ONLOGON /TR "C:\Tools\chsmartbulb.exe -t ble daemon --listen 8377 --web 0.0.0.0:8378 --on-lock dim --on-sleep off"
+schtasks /Create /TN chsmartbulb /SC ONLOGON /TR "C:\Tools\chsmartbulbd.exe -t ble --listen 8377 --web 0.0.0.0:8378 --on-lock dim --on-sleep off"
 ```
 
 The sound needs no agent on the computer that runs the service: it listens to its own output while
@@ -196,9 +196,10 @@ chsmartbulb --host laptop.local --token SECRET audio-agent
 While an agent is connected, the sound effects follow its feed; when it leaves, the service
 goes back to listening on its own machine. `status` shows which one is in use.
 
-The agent needs only the `audio` extra, no Bluetooth. Capture uses `parec` where it exists and
-WASAPI loopback of the default output on Windows (through PyAudioWPatch, which the extra pulls in
-there). `--audio-backend` forces one of `parec`, `wasapi` or `soundcard`; the last needs the
+The agent needs only the `audio` extra, no Bluetooth: numpy for the analysis, which
+[`chsmartbulb-native`](../crates/python) does in Rust instead where it is installed. Capture uses
+`parec` where it exists and WASAPI loopback of the default output on Windows (through
+PyAudioWPatch, which the extra pulls in there). `--audio-backend` forces one of `parec`, `wasapi` or `soundcard`; the last needs the
 `soundcard` package and does not work with every Windows output device. `--audio-device NAME`
 picks an output by part of its name instead of the default one.
 
@@ -259,7 +260,8 @@ last attempt failed. While the bulb is away the rest of the state is what it wil
 it returns. `agents` counts the connected agents of each kind and `watchers` the subscribed
 clients. `reconnect` makes the service try at once instead of waiting out its retry delay.
 
-`effects` lists each effect with its default `params` and a `schema` per parameter
+`effects` lists each effect with what it follows (`needs`, and `also` for one that follows both
+the sound and the screen), its default `params` and a `schema` per parameter
 (`{"type": "number", "min", "max", "step"}`, `{"type": "color", "optional"}`,
 `{"type": "colors"}` or `{"type": "steps", "most", "easings"}`), plus the names and speed range of the bulb's `native` effects. A front end
 can build its controls from that reply alone.
@@ -295,7 +297,7 @@ A screen agent sends `{"cmd": "screen", "color": "#rrggbb"}` whenever the colour
 | `drop` | Open up as the music builds, flash when it comes back in | `color`, `flash`, `build`, `delay`, `sensitivity` |
 | `ambient` | A calm colour that breathes, an accent on the beats | `base`, `accent`, `period`, `decay`, `delay`, `sensitivity` |
 | `screen` | Follow the colour of the screen | `smoothing`, `saturation`, `white`, `balance` |
-| `screensound` | The colour of the screen, as bright as the sound is loud (`chsmartbulbd` only) | `smoothing`, `saturation`, `white`, `balance`, `floor`, `release`, `shift`, `delay` |
+| `screensound` | The colour of the screen, as bright as the sound is loud | `smoothing`, `saturation`, `white`, `balance`, `floor`, `release`, `shift`, `delay` |
 
 ```bash
 chsmartbulb effect breathe -c 00ff00 -p 3
@@ -321,8 +323,8 @@ and keeps the last settings of every effect in the browser.
 
 `music`, `spectrum`, `volume`, `stereo`, `beathue`, `tempo`, `centroid`, `drop` and `ambient`
 analyse the audio on the computer, taken from the monitor of the default output. It does not matter
-where the sound plays: laptop speakers, headphones, another Bluetooth device or the bulb itself. They need the `audio` extra (numpy) and
-the `parec` tool that comes with PulseAudio and PipeWire.
+where the sound plays: laptop speakers, headphones, another Bluetooth device or the bulb itself.
+On Linux the capture needs the `parec` tool that comes with PulseAudio and PipeWire.
 
 `music` changes hue on every beat unless it is given a colour. `sensitivity` (0 to 1, default 0.5)
 sets how easily a rise in the bass counts as a beat: lower it when the light flashes on more than
@@ -376,7 +378,7 @@ tap: a record player, a television, a phone. It works for the service and for th
 alike, and `--audio-device` then names an input rather than an output.
 
 ```bash
-chsmartbulb --mic daemon
+chsmartbulbd --mic
 chsmartbulb --host laptop.local --token SECRET --mic audio-agent
 ```
 
@@ -425,12 +427,13 @@ chsmartbulb effect screen -s balance=1
 ```
 
 The service follows its own screen unless a [screen agent](#the-screen-from-another-machine) is
-connected. Capture goes through mss, which works on Windows, macOS and X11 but not on Wayland.
+connected. The agent, and an effect played by the command line without a service, capture through
+mss, which works on Windows, macOS and X11 but not on Wayland.
 
 `screensound` follows the screen and the sound together: the colour is that of `screen`, the
 brightness rises with the loudest band and falls back to `floor` at `release` per second, and the
 hue turns by up to `shift` degrees (60 at most), one way for bass-heavy sound and the other for
-bright sound. Only `chsmartbulbd` has it; the Python service does not.
+bright sound.
 
 ## Library
 
@@ -483,7 +486,7 @@ await bulb.set_native_effect(NativeEffect.BREATHING, Color(g=255), speed=4)   # 
 await bulb.set_native_effect(NativeEffect.MUSIC)   # reacts to audio played through the bulb
 ```
 
-### Your own effects
+### Effects
 
 An effect is a function from elapsed seconds to a `Color`. The library samples it at a fixed rate
 and streams the result.
@@ -491,34 +494,42 @@ and streams the result.
 ```python
 from chsmartbulb import Color, effects
 
-await effects.play(bulb, effects.hue_cycle(period=10), duration=30)
-
-player = effects.EffectPlayer(bulb, fps=20)
-await player.start(effects.breathe(Color(r=255, g=60), period=4))
-...
-await player.stop()
-
-# custom sequence: (colour, hold seconds, fade-in seconds, easing of the fade)
-alarm = effects.sequence([(Color(r=255), 0.3), (Color(), 0.3), (Color(b=255), 1.0, 0.5, "ease-out")])
-
-# anything else
 def flicker(t: float) -> Color:
     return Color(r=255, g=int(80 + 60 * abs((t * 3) % 2 - 1)))
+
+await effects.play(bulb, flicker, duration=30)
+
+player = effects.EffectPlayer(bulb, fps=20)
+await player.start(flicker)
+...
+await player.stop()
 ```
 
-Building blocks: `solid`, `breathe`, `hue_cycle`, `pulse`, `strobe`, `candle`, `palette`, `fade`,
-`sequence`, `custom`, `dimmed`. `catalog.create(name, params)` builds one from plain data.
+The effects of the catalog are the service's own, built in Rust; with
+[`chsmartbulb-native`](../crates/python) installed, `effects.create` hands them to Python by name:
 
-Sound-reactive effects read from a `MusicSource`:
+```python
+await effects.play(bulb, effects.create("breathe", {"color": "ff3c00", "period": 4}), duration=30)
+print([info["name"] for info in effects.describe()])
+```
+
+Those that follow the sound or the screen read from a source that a capture feeds:
 
 ```python
 from chsmartbulb import effects, music
 
-source = music.MusicSource()
-await source.start()
-await effects.play(bulb, music.music_pulse(source), duration=60)
-await source.stop()
+heard = effects.audio_source()
+capture = music.MusicSource()
+capture.on_block = lambda levels, onset: heard.publish(
+    levels.bass, levels.mid, levels.treble, levels.balance, onset
+)
+await capture.start()
+await effects.play(bulb, effects.create("music", audio=heard), duration=60)
+await capture.stop()
 ```
+
+`effects.screen_source()` and `screen.ScreenCapture` (whose `on_color` gives a `Color` to `push`)
+do the same for the screen.
 
 The bulb follows about 25 colour changes per second over RFCOMM and about 13 over BLE; the default
 is 20 fps and slower links simply send fewer frames. `set_brightness()` also dims a running effect.
@@ -532,11 +543,9 @@ chsmartbulb.Light          device-independent interface (colour, brightness, on/
     transport.Transport    byte pipe
       RfcommTransport      Bluetooth Classic, standard library only
       BleTransport         BLE GATT via bleak
-chsmartbulb.effects        effect engine, depends on Light only
-chsmartbulb.music          audio capture and analysis for the sound-reactive effects
-chsmartbulb.screen         screen capture reduced to one colour, for the screen effect
-chsmartbulb.catalog        effects by name with plain parameters
-chsmartbulb.service        background service and its socket protocol
-chsmartbulb.web            the web interface's files and WebSocket, standard library only
+chsmartbulb.effects        plays effects on a Light; the catalog comes from the Rust core
+chsmartbulb.music          audio capture and analysis, for the audio agent
+chsmartbulb.screen         screen capture reduced to one colour, for the screen agent
 chsmartbulb.client         requests to a running service, and the audio and screen agents
+chsmartbulb.direct         the same requests on a bulb held by this process
 ```

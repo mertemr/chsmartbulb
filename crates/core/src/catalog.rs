@@ -1,7 +1,6 @@
-//! Effects that can be requested by name with plain parameters, as in `chsmartbulb.catalog`.
+//! Effects that can be requested by name with plain parameters.
 //!
-//! [`describe`] gives front ends everything they need to build their controls, in
-//! exactly the shape the Python service sends.
+//! [`describe`] gives front ends everything they need to build their controls.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -665,7 +664,7 @@ mod tests {
     }
 
     #[test]
-    fn describe_matches_the_python_shape() {
+    fn describe_is_plain_data_covering_every_effect() {
         let described = describe();
         let all = described.as_array().unwrap();
         assert_eq!(all.len(), 19);

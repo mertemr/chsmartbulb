@@ -1,9 +1,9 @@
 //! The app: the web interface in a native window, with the bulb's service running inside.
 //!
-//! The interface is the same bundle the Python service serves. In the app it talks to
-//! the Rust service over Tauri's IPC instead of a WebSocket: `request` carries the
-//! socket protocol's requests and `bulb-state` events carry its state events. It can
-//! also connect to a Python service on the network, which needs nothing from here.
+//! The interface is the same bundle `chsmartbulbd` serves. In the app it talks to the
+//! service over Tauri's IPC instead of a WebSocket: `request` carries the socket
+//! protocol's requests and `bulb-state` events carry its state events. It can also
+//! connect to a service on the network, which needs nothing from here.
 
 use std::collections::HashMap;
 use std::path::PathBuf;

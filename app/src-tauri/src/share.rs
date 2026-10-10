@@ -1,4 +1,4 @@
-//! Offering the app's service to the network, as `chsmartbulb daemon --listen --web` does:
+//! Offering the app's service to the network, as `chsmartbulbd --listen --web` does:
 //! other machines' browsers, the command line and the audio and screen agents reach the
 //! bulb through this device.
 
@@ -79,7 +79,7 @@ pub fn addresses() -> Vec<String> {
     }
 }
 
-/// Listen on every interface; fails when a port is taken, for example by a Python service.
+/// Listen on every interface; fails when a port is taken, for example by `chsmartbulbd`.
 pub async fn start(service: &Service, token: &str) -> Result<Shared, String> {
     let any = |port| SocketAddr::from((Ipv4Addr::UNSPECIFIED, port));
     let lines = server::bind(any(LINES_PORT)).await.map_err(|e| format!("cannot listen on port {LINES_PORT}: {e}"))?;

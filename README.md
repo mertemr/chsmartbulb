@@ -5,8 +5,8 @@
 Control the CHSmartBulb / BL08A Bluetooth speaker bulb from a computer, without the vendor app.
 
 The app (CHSmartBulb) no longer runs on current phones, which leaves these bulbs stuck on whatever
-colour they had last. This project documents the bulb's protocol and provides a Python library and
-a command line tool for it.
+colour they had last. This project documents the bulb's protocol and provides a background
+service, an app, a web interface, a command line tool and a Python library for it.
 
 ## What works
 
@@ -14,8 +14,8 @@ a command line tool for it.
 - The 13 effects built into the bulb, including its sound-reactive mode
 - Your own effects, generated on the computer and streamed to the bulb, including ones that
   follow whatever audio the computer is playing
-- A background service that keeps the connection, runs effects and restores the light when the
-  bulb comes back after losing power
+- A background service (`chsmartbulbd`, one Rust program) that keeps the connection, runs effects
+  and restores the light when the bulb comes back after losing power
 - A web interface served by that service, for phones and other computers on the network
 - Control from other machines on the network, with agents so the light can follow the music or
   the screen of a computer that has no Bluetooth
@@ -26,7 +26,7 @@ Colour temperature is not supported by the hardware.
 
 ## Web interface
 
-`chsmartbulb daemon --web 8378` serves a page for phones and other computers on the network; see
+`chsmartbulbd --web 8378` serves a page for phones and other computers on the network; see
 [the usage notes](docs/usage.md#web-interface).
 
 <p>
@@ -48,17 +48,27 @@ speaker. Builds come from the [`app` workflow](.github/workflows/app.yml); see
 
 ## Install
 
-Linux with BlueZ, a paired bulb, and Python 3.10 or newer with Bluetooth socket support.
+The service and the app come ready-made with every
+[release](https://github.com/mertemr/chsmartbulb/releases): `chsmartbulbd` for Linux and Windows,
+the app for Android, Linux and Windows.
+
+The command line and the Python library need Linux with BlueZ, a paired bulb, and Python 3.10 or
+newer with Bluetooth socket support:
 
 ```bash
 git clone https://github.com/mertemr/chsmartbulb.git
 cd chsmartbulb
 uv sync
+cargo build --release -p chsmartbulb-daemon   # the service, target/release/chsmartbulbd
 ```
 
 Python builds downloaded by `uv` are compiled without Bluetooth sockets, so the project is set up
-to use the system interpreter. Add `--extra audio` for the sound-reactive effects and `--extra ble`
-for the BLE transport.
+to use the system interpreter. Add `--extra audio` or `--extra screen` for the agents that feed a
+service the sound or the screen of another computer, and `--extra ble` for the BLE transport.
+
+The effects are written once, in Rust. The service and the app carry them; the Python package
+plays them too once `uv pip install ./crates/python` (which needs a Rust toolchain) has put
+`chsmartbulb-native` next to it.
 
 ## Quick start
 
@@ -67,11 +77,12 @@ mkdir -p ~/.config/chsmartbulb
 echo CHSMARTBULB_ADDRESS=AA:BB:CC:DD:EE:FF > ~/.config/chsmartbulb/config
 uv run chsmartbulb color red
 uv run chsmartbulb rgb 0 80 255 --brightness 40 --fade
+chsmartbulbd &                                # the background service
 uv run chsmartbulb effect hue --period 10
 ```
 
-With `chsmartbulb daemon` running, the same commands go through the background service: they
-return at once, effects keep playing, and the light state is remembered.
+With `chsmartbulbd` running, the commands go through it: they return at once, effects keep
+playing, and the light state is remembered.
 
 ```python
 import asyncio
@@ -81,7 +92,7 @@ async def main():
     async with ChSmartBulb.rfcomm("AA:BB:CC:DD:EE:FF") as bulb:
         await bulb.set_rgb(255, 0, 100)
         await bulb.set_brightness(0.4)
-        await effects.play(bulb, effects.breathe(Color(b=255), period=4), duration=20)
+        await effects.play(bulb, lambda t: Color.from_hsv(36 * t), duration=20)
 
 asyncio.run(main())
 ```
@@ -99,16 +110,17 @@ capture.
 - [docs/protocol.md](docs/protocol.md): frame format, commands, effects, open questions
 - [docs/device.md](docs/device.md): services, connection behaviour, BLE on Linux
 - [docs/research.md](docs/research.md): the experiments and the guesses that turned out wrong
-- [docs/app.md](docs/app.md): the app and the Rust port of the service
+- [docs/app.md](docs/app.md): the app and the Rust core
 - [research/](research): the scripts and raw results behind the above
 
 ## Tests
 
 ```bash
+cargo test --workspace
 uv run pytest
 ```
 
-The tests need no hardware; they run against a fake transport that behaves like the real bulb.
+The tests need no hardware; they run against a simulated bulb that behaves like the real one.
 
 ## Credits
 
