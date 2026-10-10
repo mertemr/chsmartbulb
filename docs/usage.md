@@ -142,7 +142,7 @@ follows the screen, or an effect built into the bulb. The sound and screen modes
 or screen is being followed and how to bring an agent in; the device section lists every
 connection, agents and other open pages included.
 
-The page is a static bundle of about 30 kB that holds no logic of the service. It is built from
+The page is a static bundle of about 30 kB compressed that holds no logic of the service. It is built from
 [`web/`](../web) (Svelte, Tailwind) and the result is kept in `web/bundle`, which `chsmartbulbd`
 and the app carry inside them. To work on it:
 
@@ -238,7 +238,7 @@ One JSON object per line in each direction. Replies carry `"ok"` and, on failure
 ```
 
 Commands: `status`, `on`, `off`, `color`, `brightness`, `effect`, `native`, `stop`, `effects`,
-`info`, `timers`, `timer`, `raw`, `subscribe`, `reconnect`, `monitor`.
+`info`, `timers`, `timer`, `raw`, `subscribe`, `reconnect`, `monitor`, `away`, `back`.
 
 Agents stream `audio` or `screen` blocks, which are not answered. An agent may greet first with
 `{"cmd": "hello", "kind": "screen", "name": "desk", "monitors": [{"index": 1, "width": 1920,
@@ -250,7 +250,7 @@ connection, again whenever an agent of the same name comes back.
 
 A request may carry an `"id"` of its own choosing, which the reply repeats. After
 `{"cmd": "subscribe"}`, whose reply holds the current state, the service sends
-`{"event": "state", "connected": ..., "link": ..., "problem": ..., "playing": ..., "on": ...,
+`{"event": "state", "connected": ..., "link": ..., "problem": ..., "playing": ..., "away": ..., "on": ...,
 "color": ..., "brightness": ..., "effect": ..., "native": ..., "audio": ..., "screen": ...,
 "agents": {"audio": 0, "screen": 0}, "watchers": 1}`
 whenever any of it changes. A client that falls behind gets the latest state, not a backlog.
@@ -259,6 +259,9 @@ whenever any of it changes. A client that falls behind gets the latest state, no
 last attempt failed. While the bulb is away the rest of the state is what it will be given when
 it returns. `agents` counts the connected agents of each kind and `watchers` the subscribed
 clients. `reconnect` makes the service try at once instead of waiting out its retry delay.
+`{"cmd": "away", "reason": "lock"}` (or `sleep`, `shutdown`) rests the light as
+[`--on-lock` and `--on-sleep`](#when-the-computer-locks-sleeps-or-shuts-down) say, `back` ends
+that, and `away` in the state is the reason while it lasts.
 
 `effects` lists each effect with what it follows (`needs`, and `also` for one that follows both
 the sound and the screen), its default `params` and a `schema` per parameter

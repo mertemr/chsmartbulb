@@ -11,6 +11,7 @@ dependencies = []
 keywords = ["bluetooth", "ble", "rfcomm", "smart-bulb", "led", "chsmartbulb", "bl08a"]
 classifiers = [
     "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
     "Topic :: Home Automation",
 ]
