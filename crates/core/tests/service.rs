@@ -562,3 +562,15 @@ fn presence_becomes_the_requests_of_the_python_watcher() {
     assert_eq!(Presence::Unlock.request(), json!({"cmd": "back"}));
     assert_eq!(Presence::Resume.request(), json!({"cmd": "back"}));
 }
+
+#[tokio::test]
+async fn the_clock_is_set_as_the_vendor_app_sets_it() {
+    use chsmartbulb_core::protocol::ClockTime;
+
+    let fake = FakeBulb::new();
+    let bulb = Bulb::new(fake.connector());
+    bulb.connect().await.unwrap();
+    bulb.sync_clock(ClockTime { year: 2026, month: 10, day: 10, hour: 18, minute: 5, second: 9 }).await.unwrap();
+    bulb.disconnect().await;
+    assert_eq!(fake.with(|s| s.clock.clone()).unwrap(), [0, 0, 0, 0, 0, 0, 0, 0x80, 0xEA, 0x07, 10, 10, 18, 5, 9, 0]);
+}
