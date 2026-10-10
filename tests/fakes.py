@@ -4,18 +4,24 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import math
-from typing import TYPE_CHECKING, ClassVar
+import json
+from typing import TYPE_CHECKING, Any
 
+import pytest
+
+from chsmartbulb import _native, client
 from chsmartbulb import protocol as p
 from chsmartbulb.color import Color
 from chsmartbulb.errors import ConnectionFailed, TransportError
 from chsmartbulb.light import Light
-from chsmartbulb.music import Levels
 from chsmartbulb.transport import Transport
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from typing_extensions import Self
+
+    from chsmartbulb.music import Levels
 
 NAME_ANSWER = bytes.fromhex(
     "01fe0000418050000000000000000000312e302e00000003536d61727442756c6220426c7565746f6f7468"
@@ -166,35 +172,6 @@ class RecordingLight(Light):
         self.colors.append(Color())
 
 
-class FakeMusic:
-    """Stands in for :class:`chsmartbulb.music.MusicSource` without touching audio."""
-
-    created: ClassVar[list[FakeMusic]] = []
-
-    def __init__(self) -> None:
-        self.levels = Levels()
-        self.beats = 0
-        self.last_beat = -math.inf
-        self.now = 0.0
-        self.delay = 0.0
-        self.sensitivity = 0.5
-        self.running = False
-        FakeMusic.created.append(self)
-
-    def clock(self) -> float:
-        return self.now
-
-    def beat(self, at: float) -> None:
-        self.beats += 1
-        self.last_beat = at
-
-    async def start(self) -> None:
-        self.running = True
-
-    async def stop(self) -> None:
-        self.running = False
-
-
 class ScriptedSource:
     """Stands in for a capturing :class:`MusicSource`: emits the given blocks, then idles.
 
@@ -260,6 +237,76 @@ class ScriptedScreen:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+
+
+class FakeHub:
+    """Stands in for a service on a loopback port.
+
+    Asks for the token as the real one does, answers every request with ``ok`` and what
+    ``replies`` holds for its command, and keeps what it was asked (``requests``) and what
+    agents streamed to it (``streamed``).
+    """
+
+    def __init__(self, token: str | None = "s3cret", replies: dict[str, dict[str, Any]] | None = None) -> None:
+        self.token = token
+        self.replies = replies or {}
+        self.requests: list[dict[str, Any]] = []
+        self.streamed: list[dict[str, Any]] = []
+        self.agents: list[asyncio.StreamWriter] = []
+        self.connections = 0
+
+    async def __aenter__(self) -> Self:
+        self.server = await asyncio.start_server(self._session, "127.0.0.1", 0)
+        port = self.server.sockets[0].getsockname()[1]
+        self.remote = client.Remote("127.0.0.1", port, self.token or "")
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        self.hang_up()
+        self.server.close()
+
+    def tell(self, event: dict[str, Any]) -> None:
+        """Send ``event`` to every agent, as the service does when it wants something of them."""
+        for agent in self.agents:
+            agent.write(json.dumps(event).encode() + b"\n")
+
+    def hang_up(self) -> None:
+        for agent in self.agents:
+            agent.close()
+        self.agents.clear()
+
+    def sent(self, command: str) -> list[dict[str, Any]]:
+        return [message for message in self.streamed if message["cmd"] == command]
+
+    async def _session(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self.connections += 1
+        trusted = self.token is None
+        with contextlib.suppress(ConnectionError):
+            while line := await reader.readline():
+                message = json.loads(line)
+                command = message.get("cmd")
+                if command == "auth":
+                    trusted = trusted or message.get("token") == self.token
+                    reply: dict[str, Any] = {"ok": trusted} if trusted else {"ok": False, "error": "wrong token"}
+                elif not trusted:
+                    writer.write(b'{"ok": false, "error": "not authorised"}\n')
+                    break
+                elif command in ("hello", "audio", "screen"):
+                    if writer not in self.agents:
+                        self.agents.append(writer)
+                    self.streamed.append(message)
+                    continue  # an agent's stream is not answered
+                else:
+                    self.requests.append(message)
+                    reply = {"ok": True, **self.replies.get(command, {})}
+                writer.write(json.dumps(reply).encode() + b"\n")
+        writer.close()
+
+
+def needs_native() -> None:
+    """Skip the test where the Rust core is not installed, or is switched off."""
+    if _native.load() is None:
+        pytest.skip("needs chsmartbulb-native")
 
 
 async def until(condition: Callable[[], bool], *, limit: float = 1.0) -> None:

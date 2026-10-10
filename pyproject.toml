@@ -1,7 +1,7 @@
 [project]
 name = "chsmartbulb"
 version = "0.1.0"
-description = "Control CHSmartBulb / BL08A Bluetooth speaker bulbs without the vendor app"
+description = "Command line, agents and library for CHSmartBulb / BL08A Bluetooth speaker bulbs"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -26,7 +26,7 @@ audio = [
     # WASAPI loopback capture; Linux uses the parec tool instead
     "PyAudioWPatch>=0.2.12; sys_platform == 'win32'",
 ]
-# the screen effect; mss captures on Windows, macOS and X11
+# the screen agent; mss captures on Windows, macOS and X11
 screen = ["numpy>=1.24", "mss>=9"]
 
 [project.scripts]

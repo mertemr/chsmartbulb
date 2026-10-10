@@ -6,7 +6,9 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import socket
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
@@ -47,6 +49,14 @@ class Remote:
 
     def __str__(self) -> str:
         return f"{self.host}:{self.port}"
+
+
+def default_socket_path() -> Path:
+    """Where the service on this machine listens."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    user = os.getuid() if hasattr(os, "getuid") else os.environ.get("USERNAME", "user")
+    base = Path(runtime) if runtime else Path(tempfile.gettempdir()) / f"chsmartbulb-{user}"
+    return base / "chsmartbulb.sock"
 
 
 #: Where a service listens: a Unix socket path on this machine or a :class:`Remote`.

@@ -1,21 +1,24 @@
 """Host-driven effects: colours computed on the computer and streamed to any :class:`Light`.
 
-An effect is just a function from elapsed seconds to a :class:`Color`. That keeps
-effects pure and testable, and lets them be combined freely. :func:`play` samples
-one at a fixed rate and sends the frames; :class:`EffectPlayer` runs it in the
-background.
+An effect is just a function from elapsed seconds to a :class:`Color`. :func:`play`
+samples one at a fixed rate and sends the frames; :class:`EffectPlayer` runs it in
+the background. Your own function works as well as one from the catalog.
+
+The catalog itself lives in the Rust core, which the services run. :func:`create`
+builds its effects here through ``chsmartbulb-native``, so there is one of each.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import math
+import json
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
-from .color import OFF, Color, parse_color
+from . import _native
+from .color import Color
 
 if TYPE_CHECKING:
     from .light import Light
@@ -24,17 +27,6 @@ Effect = Callable[[float], Color]
 
 #: The CHSmartBulb follows about 25 colour changes per second; 20 leaves headroom.
 DEFAULT_FPS = 20.0
-
-WARM = Color(r=255, g=110, b=20)
-
-#: How a fade moves from 0 to 1 as its time runs from 0 to 1.
-EASINGS: dict[str, Callable[[float], float]] = {
-    "linear": lambda x: x,
-    "ease-in": lambda x: x * x,
-    "ease-out": lambda x: 1 - (1 - x) ** 2,
-    "ease-in-out": lambda x: x * x * (3 - 2 * x),
-}
-MAX_STEPS = 16  # of a custom effect
 
 
 async def play(
@@ -94,143 +86,49 @@ class EffectPlayer:
             await self._task
 
 
-# --- building blocks ------------------------------------------------------------------
+# --- the catalog ----------------------------------------------------------------------
 
 
-def solid(color: Color) -> Effect:
-    return lambda t: color
+def _text(params: Mapping[str, Any] | None) -> str | None:
+    def plain(value: Any) -> Any:
+        if isinstance(value, Color):
+            return value.to_hex()
+        raise TypeError(f"{value!r} cannot be an effect parameter")
+
+    return None if params is None else json.dumps(params, default=plain)
 
 
-def breathe(color: Color, period: float = 4.0, floor: float = 0.0) -> Effect:
-    """Swell between ``floor`` (0..1) and full brightness, starting dark."""
-
-    def effect(t: float) -> Color:
-        level = (1 - math.cos(2 * math.pi * t / period)) / 2
-        return color.scaled(floor + (1 - floor) * level * level)  # squared: gentler at the dim end
-
-    return effect
+def describe() -> list[dict[str, Any]]:
+    """The catalog as plain data: each effect's name, summary, parameters and what it follows."""
+    return json.loads(_native.require("the effect catalog").describe())
 
 
-def hue_cycle(period: float = 10.0, saturation: float = 1.0, value: float = 1.0) -> Effect:
-    """Walk once around the colour wheel every ``period`` seconds."""
-    return lambda t: Color.from_hsv(360 * t / period, saturation, value)
+def check(name: str, params: Mapping[str, Any] | None = None) -> None:
+    """Raise :class:`ValueError` unless ``params`` fit the effect ``name``."""
+    _native.require("the effect catalog").check(name, _text(params))
 
 
-def pulse(color: Color, period: float = 1.0, decay: float = 4.0, base: Color = OFF) -> Effect:
-    """Flash to ``color`` at the start of every period, then decay towards ``base``."""
-
-    def effect(t: float) -> Color:
-        phase = (t % period) / period
-        return base.mix(color, math.exp(-decay * phase))
-
-    return effect
+def audio_source() -> Any:
+    """What a sound-reactive effect follows: ``publish(bass, mid, treble, balance, onset)`` each block into it."""
+    return _native.require("a sound-reactive effect").AudioSource()
 
 
-def strobe(color: Color, hz: float = 5.0, duty: float = 0.5, base: Color = OFF) -> Effect:
-    """Hard on/off blinking."""
-    return lambda t: color if (t * hz) % 1.0 < duty else base
+def screen_source() -> Any:
+    """What a screen effect follows: ``push(r, g, b)`` the colour of the picture into it."""
+    return _native.require("a screen effect").ScreenSource()
 
 
-def fade(start: Color, end: Color, duration: float) -> Effect:
-    """Blend from ``start`` to ``end`` over ``duration`` seconds, then hold ``end``."""
-    return lambda t: start.mix(end, t / duration if duration > 0 else 1.0)
-
-
-def sequence(
-    steps: Sequence[tuple[Color, float] | tuple[Color, float, float] | tuple[Color, float, float, str]],
+def create(
+    name: str,
+    params: Mapping[str, Any] | None = None,
     *,
-    loop: bool = True,
+    audio: Any = None,
+    screen: Any = None,
 ) -> Effect:
-    """A custom colour sequence with custom timing.
+    """Build the named effect of the catalog.
 
-    Each step is ``(color, hold)``, ``(color, hold, fade_in)`` or
-    ``(color, hold, fade_in, easing)``: the light blends from the previous step's
-    colour over ``fade_in`` seconds, then holds for ``hold`` seconds. ``easing``
-    names one of :data:`EASINGS` and shapes the blend; it is linear otherwise.
+    Those that follow the sound or the screen need an :func:`audio_source` or a
+    :func:`screen_source`, fed by whatever captures.
     """
-    if not steps:
-        raise ValueError("sequence needs at least one step")
-    normalized = []
-    for step in steps:
-        easing = step[3] if len(step) > 3 else "linear"
-        if easing not in EASINGS:
-            raise ValueError(f"unknown easing {easing!r}; choose from: {', '.join(EASINGS)}")
-        normalized.append((step[0], float(step[1]), float(step[2]) if len(step) > 2 else 0.0, EASINGS[easing]))
-    total = sum(hold + fade_in for _, hold, fade_in, _ in normalized)
-    if total <= 0:
-        raise ValueError("sequence must last longer than zero seconds")
-
-    def effect(t: float) -> Color:
-        if loop:
-            t %= total
-        elif t >= total:
-            return normalized[-1][0]
-        # before the first lap completes there is no previous colour to blend from
-        previous = normalized[-1][0] if loop else normalized[0][0]
-        for color, hold, fade_in, ease in normalized:
-            if t < fade_in:
-                return previous.mix(color, ease(t / fade_in))
-            t -= fade_in
-            if t < hold:
-                return color
-            t -= hold
-            previous = color
-        return normalized[-1][0]
-
-    return effect
-
-
-def dimmed(effect: Effect, level: float) -> Effect:
-    """Scale another effect's output."""
-    return lambda t: effect(t).scaled(level)
-
-
-def candle(color: Color = WARM, depth: float = 0.6) -> Effect:
-    """Uneven flicker: ``depth`` is how far the flame dips, 0 (steady) to 1 (to dark)."""
-
-    def effect(t: float) -> Color:
-        # three sines with unrelated frequencies never line up, which reads as random
-        wobble = (math.sin(7.3 * t) + math.sin(12.1 * t + 1.3) + math.sin(23.7 * t + 0.5)) / 3
-        return color.scaled(1.0 - depth * (0.5 + 0.5 * wobble))
-
-    return effect
-
-
-def palette(colors: Sequence[Color], hold: float = 2.0, fade_in: float = 1.0) -> Effect:
-    """Drift through ``colors`` in order, holding each and blending into the next."""
-    return sequence([(color, hold, fade_in) for color in colors])
-
-
-_STEP_KEYS = ("color", "hold", "fade", "ease")
-
-
-def custom(steps: Sequence[Mapping[str, Any]], speed: float = 1.0) -> Effect:
-    """A looping sequence described with plain data, as a front end or a file would hold it.
-
-    Each step is ``{"color": ..., "hold": seconds, "fade": seconds, "ease": name}``:
-    the light blends into ``color`` over ``fade`` seconds, shaped by ``ease`` (one
-    of :data:`EASINGS`), then holds it. Only the colour is required. ``speed``
-    multiplies the pace of the whole sequence.
-    """
-    if speed <= 0:
-        raise ValueError("speed must be positive")
-    if len(steps) > MAX_STEPS:
-        raise ValueError(f"a custom effect takes at most {MAX_STEPS} steps")
-    parsed = []
-    for number, step in enumerate(steps, 1):
-        if not isinstance(step, Mapping):
-            raise ValueError(f"step {number} must be an object with a color")
-        for key in step:
-            if key not in _STEP_KEYS:
-                raise ValueError(f"step {number} has no {key!r}; it takes: {', '.join(_STEP_KEYS)}")
-        if step.get("color") is None:
-            raise ValueError(f"step {number} needs a color")
-        color = step["color"]
-        hold, fade_in = float(step.get("hold", 1.0)), float(step.get("fade", 0.0))
-        if hold < 0 or fade_in < 0:
-            raise ValueError(f"hold and fade of step {number} must not be negative")
-        parsed.append(
-            (color if isinstance(color, Color) else parse_color(str(color)), hold, fade_in, step.get("ease", "linear"))
-        )
-    played = sequence(parsed)
-    return lambda t: played(t * speed)
+    built = _native.require("the effect catalog").create(name, _text(params), audio, screen)
+    return lambda t: Color(*built(t))

@@ -6,9 +6,8 @@ import types
 
 import pytest
 
-from chsmartbulb import Color, catalog, screen
+from chsmartbulb import Color, screen
 from chsmartbulb.errors import SmartBulbError
-from chsmartbulb.screen import RemoteScreen
 from fakes import until
 
 np = pytest.importorskip("numpy")
@@ -88,58 +87,6 @@ def test_missing_capture_library_is_reported_clearly(monkeypatch):
     monkeypatch.setitem(sys.modules, "mss", None)
     with pytest.raises(SmartBulbError, match=r"pip install chsmartbulb\[screen\]"):
         screen.ScreenCapture()
-
-
-def test_screen_effect_follows_smoothly_and_boosts_the_colour():
-    source = RemoteScreen()
-    follow = catalog.create("screen", {"smoothing": 0.5, "saturation": 1, "white": 0}, screen=source)
-    assert follow(0.0) == Color()
-    source.push(Color(r=200, g=100))
-    part = follow(0.1)
-    assert 0 < part.r < 60  # on its way
-    assert follow(10.0) == Color(r=200, g=100)
-    source.clear()
-    assert follow(20.0) == Color()
-
-    source.push(Color(r=200, g=100, b=100))
-    vivid = catalog.create("screen", {"smoothing": 0, "saturation": 2, "white": 0}, screen=source)
-    assert vivid(0.0) == Color(r=200)  # twice as colourful: the grey part is gone
-    with pytest.raises(ValueError, match="no screen source"):
-        catalog.create("screen")
-    with pytest.raises(ValueError, match="smoothing"):
-        catalog.create("screen", {"smoothing": -1}, screen=source)
-
-
-def test_screen_effect_sends_grey_to_the_white_leds():
-    source = RemoteScreen()
-    source.push(Color(r=200, g=100, b=100))
-    plain = catalog.create("screen", {"smoothing": 0, "saturation": 1}, screen=source)
-    assert plain(0.0) == Color(r=100, w=100)  # the grey part of the pink
-    source.push(Color(128, 128, 128))
-    assert plain(1.0) == Color(w=128)
-    half = catalog.create("screen", {"smoothing": 0, "saturation": 1, "white": 0.5}, screen=source)
-    assert half(0.0) == Color(64, 64, 64, 64)
-    assert Color(r=255, g=40).with_white() == Color(r=255, g=40)  # nothing grey in it
-    with pytest.raises(ValueError, match="white"):
-        catalog.create("screen", {"white": 2}, screen=source)
-
-
-def test_balance_keeps_hues_true_without_dimming_pure_colours():
-    assert screen.balanced(Color(r=255, g=255)) == Color(r=122, g=255)  # yellow needs far less red than green
-    assert screen.balanced(Color(r=255)) == Color(r=255)
-    assert screen.balanced(Color(r=255, g=20)) == Color(r=255, g=42)  # the strongest channel stays put
-    assert screen.balanced(Color(128, 128, 128, 40)) == Color(61, 128, 29, 40)  # the white LEDs are left alone
-    assert screen.balanced(Color(r=255, g=255), 0.0) == Color(r=255, g=255)
-    assert screen.balanced(Color(r=255, g=255), 0.5).r == 177  # half way, on a ratio scale
-    assert screen.balanced(Color()) == Color()
-
-    source = RemoteScreen()
-    source.push(Color(r=200, g=200, b=100))
-    params = {"smoothing": 0, "saturation": 1}
-    assert catalog.create("screen", params, screen=source)(0.0) == Color(r=100, g=100, w=100)  # off unless asked for
-    assert catalog.create("screen", {**params, "balance": 1}, screen=source)(0.0) == Color(r=48, g=100, w=100)
-    with pytest.raises(ValueError, match="balance"):
-        catalog.create("screen", {"balance": 2}, screen=source)
 
 
 def test_capture_slows_down_while_the_picture_stands_still():
