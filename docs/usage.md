@@ -17,6 +17,7 @@ CHSMARTBULB_ADDRESS=AA:BB:CC:DD:EE:FF
 | `CHSMARTBULB_HOST` | `--host` |
 | `CHSMARTBULB_TRANSPORT` | `--transport` |
 | `CHSMARTBULB_AUDIO_DEVICE` | `--audio-device` |
+| `CHSMARTBULB_AUDIO_APP` | `--audio-app` of `chsmartbulbd` |
 | `CHSMARTBULB_MONITOR` | `--monitor` |
 
 Each line is `NAME=VALUE`; a line starting with `#` is a comment, and a value may be quoted. An
@@ -69,7 +70,7 @@ chsmartbulbd --address AA:BB:CC:DD:EE:FF --listen 8377 --web 8378 --token SECRET
 It reads the [settings file](#command-line) the command line reads, so the address and the token
 can stay there. `chsmartbulbd --help` lists its options: `--address`, `--transport`, `--channel`,
 `--socket`, `--listen`, `--web`, `--token`, `--no-token`, `--fps`, `--no-state`, `--mic`,
-`--audio-device`, `--monitor`, `--choose-screen`, `--on-lock`, `--on-sleep`, `--simulate`.
+`--audio-device`, `--audio-app`, `--monitor`, `--choose-screen`, `--on-lock`, `--on-sleep`, `--simulate`.
 
 It listens to the sound itself, with `parec` on Linux and through WASAPI on Windows, and follows
 its own screen on Windows and on an X11 desktop (`--monitor`). In a Wayland session nobody may
@@ -245,7 +246,7 @@ One JSON object per line in each direction. Replies carry `"ok"` and, on failure
 ```
 
 Commands: `status`, `on`, `off`, `color`, `brightness`, `effect`, `native`, `stop`, `effects`,
-`info`, `timers`, `timer`, `raw`, `subscribe`, `reconnect`, `monitor`, `away`, `back`, `sleep`.
+`info`, `timers`, `timer`, `raw`, `subscribe`, `reconnect`, `monitor`, `apps`, `listen`, `away`, `back`, `sleep`.
 
 Agents stream `audio` or `screen` blocks, which are not answered. An agent may greet first with
 `{"cmd": "hello", "kind": "screen", "name": "desk", "monitors": [{"index": 1, "width": 1920,
@@ -254,6 +255,11 @@ lists it under `agentInfo`. `{"cmd": "monitor", "agent": "<id>", "index": 2}` as
 for another monitor (`0` is all of them; `"local"` addresses the service's own capture, where it
 has one), and the service tells that agent `{"event": "monitor", "monitor": 2}` on its own
 connection, again whenever an agent of the same name comes back.
+
+Where the service can hear one program alone (Linux), its state carries `localApp`: the program
+it follows, or `null` for everything the computer plays. `{"cmd": "apps"}` answers with the
+programs playing now, as `{"apps": ["Discord", "Spotify"], "app": null}`, and
+`{"cmd": "listen", "app": "Spotify"}` follows one of them (`null` is everything again).
 
 A request may carry an `"id"` of its own choosing, which the reply repeats. After
 `{"cmd": "subscribe"}`, whose reply holds the current state, the service sends
@@ -410,6 +416,14 @@ chsmartbulb effect ambient -s base=ff6e14 -s accent=ffffff
 
 `--audio-device SOURCE` picks a different source, for example the monitor of one particular
 output (`pactl list short sources` shows the names).
+
+On Linux the service can follow one program instead of everything the computer plays, so that a
+call or a game does not move the light with the music. The page lists the programs playing now
+under the sound effects; `chsmartbulbd --audio-app Spotify` starts that way. The program is
+found by name each time it starts to play, so it may be chosen before it runs, and the light
+stays dark while it plays nothing. When a program plays several things at once, a browser with
+two tabs, one of them is followed. It needs `pactl` beside `parec`, and does not apply to
+`--mic` or to an agent's sound.
 
 `--mic` listens to the microphone instead, for music that plays on something the computer cannot
 tap: a record player, a television, a phone. It works for the service and for the audio agent
