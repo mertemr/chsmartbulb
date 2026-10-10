@@ -1,0 +1,29 @@
+# cargo-deny: known advisories, licences and where the crates come from.
+# Run with `cargo deny check advisories licenses sources`.
+
+[graph]
+all-features = true
+
+[advisories]
+ignore = [
+    # a build-time dependency of the GTK 3 bindings, which Tauri 2 uses on Linux
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error is unmaintained; no release of Tauri is without it" },
+]
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    # file-level copyleft: fine to link, and nothing of it is modified here
+    "MPL-2.0",
+]
+confidence-threshold = 0.9
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

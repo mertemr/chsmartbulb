@@ -1,0 +1,3 @@
+# glib 0.18 comes in with GTK 3, which Tauri 2 uses on Linux; the fix is in glib 0.20.
+# The unsound code is glib::VariantStrIter, which nothing here calls.
+GHSA-wrw7-89jp-8q8g
