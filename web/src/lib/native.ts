@@ -1,5 +1,5 @@
 // The app's own service, reached over Tauri's IPC instead of a WebSocket. Only the
-// app build loads this module; the page the Python service serves never does.
+// app build loads this module; the page a service serves never does.
 
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'

@@ -1,13 +1,14 @@
-"""Sound-reactive effects driven by audio captured on the computer.
+"""Sound captured on the computer, analysed into band levels and onsets.
 
 The sound is taken from the monitor of the default output, so it does not matter
 where it plays: laptop speakers, headphones, another Bluetooth device or the bulb.
-Needs ``numpy`` (``pip install chsmartbulb[audio]``). Capture uses the ``parec``
-tool where it exists (PulseAudio, PipeWire), WASAPI loopback through
-``PyAudioWPatch`` on Windows, and the ``soundcard`` package as a last resort.
+Capture uses the ``parec`` tool where it exists (PulseAudio, PipeWire), WASAPI
+loopback through ``PyAudioWPatch`` on Windows, and the ``soundcard`` package as a
+last resort. The analysis runs in Rust when ``chsmartbulb-native`` is installed and
+with ``numpy`` (``pip install chsmartbulb[audio]``) otherwise.
 
-The analysis can also run on another machine: :class:`RemoteAudio` is fed over the
-network by ``chsmartbulb audio-agent``.
+This is what ``chsmartbulb audio-agent`` forwards to a service, and what a
+sound-reactive effect played by this process follows.
 """
 
 from __future__ import annotations
@@ -16,30 +17,23 @@ import asyncio
 import contextlib
 import logging
 import math
-import os
 import shutil
 import sys
 import threading
-import time
-from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
-from .color import BLUE, OFF, RED, WHITE, Color
-from .effects import WARM
+from . import _native
 from .errors import SmartBulbError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-    from .effects import Effect
 
 RATE = 22050
 BLOCK = 512  # 23 ms per analysis step
 DEFAULT_DEVICE = "@DEFAULT_MONITOR@"
 _DEFAULT_MICROPHONE = "@DEFAULT_SOURCE@"  # the same thing, for PulseAudio
 BACKENDS = ("auto", "parec", "wasapi", "soundcard")
-DEFAULT_SENSITIVITY = 0.5
 
 log = logging.getLogger(__name__)
 
@@ -48,47 +42,9 @@ _GAIN_HALF_LIFE = 4.0  # seconds for the automatic gain to forget a loud passage
 _SILENCE = 1e-4
 _ROOM_MARGIN = 2.0  # a microphone's sound must stand this many times above the room's noise
 _ROOM_DOUBLING = 30.0  # seconds for the estimate of that noise to double while nothing dips below it
-_BEAT_GAP = 0.15  # seconds; caps detection at 400 bpm
 _BEAT_FLOOR = 0.05  # a beat needs the bass above this fraction of its recent peak
 _ONSET_CAP = 100.0
-_TEMPO_SLOW = Color(r=255, g=60)
-_TEMPO_FAST = Color(g=160, b=255)
-_TEMPO_INTERVALS = (0.25, 1.5)  # seconds between beats that count as a tempo, 240 to 40 bpm
-_TEMPO_BLEND = 0.3  # share of a new interval in the estimate
-_TEMPO_RELEASE = 3.0  # brightness falls this much per second
-_DROP_SLOW = 8.0  # seconds; the long average the lull is measured against
-_LULL_RATIO = 0.35  # a lull: the short average under this share of the long one
-_LULL_FLOOR = 0.05  # and the long one above this, so there was something to fall from
-_LULL_HOLD = 0.5  # seconds a lull must last
-_LULL_MEMORY = 30.0  # seconds `lulled` is remembered once the lull is over
-_DROP_ENERGY = 0.6  # a drop's beat must be this loud
-_FLASH_HZ = 8.0
-_PAN_SMOOTHING = 0.15  # seconds for the stereo position to settle
-_DARK = 1 / 255
-MAX_DELAY = 2.0
 _STREAM_POLL = 0.5  # seconds between checks that a callback-driven stream is still alive
-
-
-def _native() -> Any:
-    """The Rust analysis from ``chsmartbulb-native`` when it is installed, else ``None``.
-
-    ``CHSMARTBULB_NATIVE=0`` keeps to the Python one.
-    """
-    if os.environ.get("CHSMARTBULB_NATIVE", "1") == "0":
-        return None
-    try:
-        import chsmartbulb_native
-    except ImportError:
-        return None
-    return chsmartbulb_native
-
-
-def beat_ratio(sensitivity: float) -> float:
-    """How far the bass must rise above its recent average to count as a beat.
-
-    1.5 at the default sensitivity; 5 at 0 (only the hardest hits), barely above 1 at 1.
-    """
-    return 1.0 + 0.5 * 8.0 ** (1.0 - 2.0 * sensitivity)
 
 
 @dataclass(frozen=True)
@@ -99,22 +55,6 @@ class Levels:
     mid: float = 0.0
     treble: float = 0.0
     balance: float = 0.0  # -1 all left, +1 all right
-
-
-class AudioSource(Protocol):
-    """What the sound-reactive effects read and the service starts and stops."""
-
-    levels: Levels
-    beats: int
-    last_beat: float
-    delay: float
-    sensitivity: float
-
-    def clock(self) -> float: ...
-
-    async def start(self) -> None: ...
-
-    async def stop(self) -> None: ...
 
 
 class Capture(Protocol):
@@ -129,74 +69,13 @@ class Capture(Protocol):
     async def stop(self) -> None: ...
 
 
-class _Published:
-    """Levels and beats as the effects see them.
-
-    ``delay`` holds them back by that many seconds. The capture hears the sound
-    before a Bluetooth speaker or headphones play it, so without a delay the
-    light runs ahead of what you hear. ``sensitivity`` (0..1) decides which
-    onsets count as beats, see :func:`beat_ratio`.
-    """
-
-    def __init__(self, clock: Callable[[], float]) -> None:
-        self._clock = clock
-        self._held: deque[tuple[float, Levels, bool]] = deque()
-        self._last_onset = -math.inf
-        self.delay = 0.0
-        self.sensitivity = DEFAULT_SENSITIVITY
-        self.levels = Levels()
-        self.beats = 0
-        self.last_beat = -math.inf
-
-    def clock(self) -> float:
-        """The time base :attr:`last_beat` is measured on."""
-        return self._clock()
-
-    def _publish(self, levels: Levels, onset: float) -> None:
-        """Take one analysed block; ``onset`` is the bass relative to its recent average."""
-        now = self.clock()
-        beat = onset >= beat_ratio(self.sensitivity) and now - self._last_onset > _BEAT_GAP
-        if beat:
-            self._last_onset = now
-        self._held.append((now + self.delay, levels, beat))
-        while self._held and self._held[0][0] <= now:
-            due, self.levels, was_beat = self._held.popleft()
-            if was_beat:
-                self.beats += 1
-                self.last_beat = due
-
-    def _clear(self) -> None:
-        self._held.clear()
-        self.levels = Levels()
-
-
-class RemoteAudio(_Published):
-    """An audio source whose analysis arrives from elsewhere, for example over the network."""
-
-    def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
-        super().__init__(clock)
-
-    def push(self, levels: Levels, onset: float) -> None:
-        self._publish(levels, onset)
-
-    def clear(self) -> None:
-        """Forget what was pending and go silent, for when the feed stops."""
-        self._clear()
-
-    async def start(self) -> None:
-        """Nothing to start: the feed is not ours to control."""
-
-    async def stop(self) -> None:
-        """Nothing to stop."""
-
-
-class MusicSource(_Published):
+class MusicSource:
     """Analyses PCM audio into band levels and beats.
 
     :meth:`feed` does the analysis and can be driven by anything; :meth:`start`
     feeds it from the system's audio output, or with ``mic`` from a microphone.
-    ``on_block`` is called with every analysed block and its onset strength
-    before any delay, which is what the audio agent forwards.
+    ``on_block`` is called with every analysed block and its onset strength (the
+    bass relative to its recent average), which is what the audio agent forwards.
 
     A microphone hears the room as well as the music, so with ``mic`` the
     steady noise of the room is estimated and taken off each band. Without that
@@ -215,10 +94,8 @@ class MusicSource(_Published):
         device: str = DEFAULT_DEVICE,
         backend: str = "auto",
         mic: bool = False,
-        clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        super().__init__(clock)
-        self._rust: Any = _native()
+        self._rust: Any = _native.load()
         self._np: Any = None
         try:
             import numpy
@@ -226,7 +103,9 @@ class MusicSource(_Published):
             self._np = numpy
         except ImportError:
             if self._rust is None:
-                raise SmartBulbError("sound-reactive effects need numpy: pip install chsmartbulb[audio]") from None
+                raise SmartBulbError(
+                    "analysing sound needs chsmartbulb-native or numpy: pip install chsmartbulb[audio]"
+                ) from None
         if backend not in BACKENDS:
             raise ValueError(f"unknown audio backend {backend!r}; choose from: {', '.join(BACKENDS)}")
         self._device = device
@@ -234,6 +113,7 @@ class MusicSource(_Published):
         self._mic = mic
         self._room = [math.inf, math.inf, math.inf]  # the quietest each band has been lately
         self.on_block: Callable[[Levels, float], None] | None = None
+        self.levels = Levels()  # of the last block analysed
         self._configure(rate, block, channels)
         self._peaks = [0.0, 0.0, 0.0]
         self._bass_average = 0.0
@@ -302,9 +182,9 @@ class MusicSource(_Published):
         self._deliver(Levels(*levels, balance=self._balance(frames)), onset)
 
     def _deliver(self, levels: Levels, onset: float) -> None:
+        self.levels = levels
         if self.on_block is not None:
             self.on_block(levels, onset)
-        self._publish(levels, onset)
 
     def _above_room(self, band: int, value: float) -> float:
         """What of ``value`` stands out of the room's noise, which is the least the band has held lately."""
@@ -505,348 +385,3 @@ class MusicSource(_Published):
             with contextlib.suppress(ProcessLookupError):
                 process.kill()
             await process.wait()
-
-
-def _set_delay(source: AudioSource, delay: float) -> None:
-    if not 0.0 <= delay <= MAX_DELAY:
-        raise ValueError(f"delay must be within 0..{MAX_DELAY:g} seconds")
-    source.delay = delay
-
-
-def _check_sensitivity(source: AudioSource, sensitivity: float) -> None:
-    if not 0.0 <= sensitivity <= 1.0:
-        raise ValueError("sensitivity must be within 0..1")
-    source.sensitivity = sensitivity
-
-
-def _loudness(levels: Levels) -> float:
-    return max(levels.bass, levels.mid, levels.treble)
-
-
-def music_pulse(
-    source: AudioSource,
-    color: Color | None = None,
-    decay: float = 5.0,
-    delay: float = 0.0,
-    sensitivity: float = DEFAULT_SENSITIVITY,
-) -> Effect:
-    """Flash on every beat and glow with the bass in between.
-
-    Without a ``color`` the hue steps to a new one on each beat. ``delay`` holds
-    the light back to line up with a late audio output. ``sensitivity`` (0..1)
-    sets how easily a rise in the bass counts as a beat.
-    """
-    _set_delay(source, delay)
-    _check_sensitivity(source, sensitivity)
-
-    def effect(t: float) -> Color:
-        flash = math.exp(-decay * (source.clock() - source.last_beat))
-        level = min(1.0, max(flash, 0.6 * source.levels.bass))
-        if level < _DARK:
-            return OFF  # scaled() never rounds a lit channel to zero, silence should be dark
-        base = color if color is not None else Color.from_hsv(source.beats * 47.0)
-        return base.scaled(level)
-
-    return effect
-
-
-def music_beathue(
-    source: AudioSource,
-    step: float = 47.0,
-    decay: float = 5.0,
-    floor: float = 0.1,
-    saturation: float = 1.0,
-    delay: float = 0.0,
-    sensitivity: float = DEFAULT_SENSITIVITY,
-) -> Effect:
-    """Turn the colour by ``step`` degrees on every beat; flash and glow with the bass.
-
-    Between beats the light falls to ``floor`` (0..1) of its brightness, never fully dark.
-    """
-    if not 1.0 <= step <= 180.0:
-        raise ValueError("step must be within 1..180 degrees")
-    if decay <= 0.0:
-        raise ValueError("decay must be positive")
-    if not 0.0 <= floor <= 1.0:
-        raise ValueError("floor must be within 0..1")
-    if not 0.0 <= saturation <= 1.0:
-        raise ValueError("saturation must be within 0..1")
-    _set_delay(source, delay)
-    _check_sensitivity(source, sensitivity)
-
-    def effect(t: float) -> Color:
-        flash = math.exp(-decay * (source.clock() - source.last_beat))
-        level = floor + (1.0 - floor) * max(flash, 0.6 * source.levels.bass)
-        if level < _DARK:
-            return OFF
-        return Color.from_hsv(source.beats * step, saturation).scaled(level)
-
-    return effect
-
-
-def music_tempo(
-    source: AudioSource,
-    slow: float = 80.0,
-    fast: float = 160.0,
-    smoothing: float = 2.0,
-    delay: float = 0.0,
-    sensitivity: float = DEFAULT_SENSITIVITY,
-) -> Effect:
-    """Warm for slow music, cool for fast; brightness follows the loudness.
-
-    The tempo is estimated from the gaps between beats. ``slow`` and ``fast`` (bpm) are the
-    tempos shown as the warm and the cool end, ``smoothing`` the seconds the colour takes to settle.
-    """
-    if slow >= fast:
-        raise ValueError("slow must be below fast")
-    if smoothing < 0.0:
-        raise ValueError("smoothing must not be negative")
-    _set_delay(source, delay)
-    _check_sensitivity(source, sensitivity)
-    estimate: float | None = None  # seconds between beats
-    previous: float | None = None
-    seen = source.beats
-    position = 0.5
-    shown = 0.0
-    last = 0.0
-
-    def effect(t: float) -> Color:
-        nonlocal estimate, previous, seen, position, shown, last
-        step = max(0.0, t - last)
-        last = t
-        if source.beats != seen:
-            risen = source.beats - seen
-            seen = source.beats
-            if risen > 0 and previous is not None:
-                interval = (source.last_beat - previous) / risen
-                if _TEMPO_INTERVALS[0] <= interval <= _TEMPO_INTERVALS[1]:
-                    estimate = (
-                        interval
-                        if estimate is None
-                        else (1.0 - _TEMPO_BLEND) * estimate + _TEMPO_BLEND * interval
-                    )
-            previous = source.last_beat
-        target = 0.5 if estimate is None else min(1.0, max(0.0, (60.0 / estimate - slow) / (fast - slow)))
-        if smoothing > 0.0:
-            position += (target - position) * (1.0 - math.exp(-step / smoothing))
-        else:
-            position = target
-        shown = max(_loudness(source.levels), shown - _TEMPO_RELEASE * step)
-        level = shown * shown
-        if level < _DARK:
-            return OFF
-        return _TEMPO_SLOW.mix(_TEMPO_FAST, position).scaled(level)
-
-    return effect
-
-
-def music_centroid(
-    source: AudioSource,
-    low: Color = RED,
-    high: Color = BLUE,
-    width: float = 2.0,
-    release: float = 3.0,
-    delay: float = 0.0,
-) -> Effect:
-    """Blend between two colours by where the sound's weight lies between bass and treble.
-
-    Bass-heavy sound shows ``low``, bright sound ``high``. The weight of real music seldom passes
-    the middle, so ``width`` stretches it. Brightness follows the loudness.
-    """
-    if width <= 0.0:
-        raise ValueError("width must be positive")
-    _set_delay(source, delay)
-    shown = 0.0
-    position = 0.0
-    last = 0.0
-
-    def effect(t: float) -> Color:
-        nonlocal shown, position, last
-        step = max(0.0, t - last)
-        last = t
-        levels = source.levels
-        total = levels.bass + levels.mid + levels.treble
-        faded = max(0.0, shown - release * step)
-        if total > 0.0:  # silence says nothing about the weight, keep the last one
-            target = min(1.0, max(0.0, width * (0.5 * levels.mid + levels.treble) / total))
-            if faded * faded < _DARK:
-                position = target
-            else:
-                position += (target - position) * (1.0 - math.exp(-step / _PAN_SMOOTHING))
-        shown = max(_loudness(levels), faded)
-        level = shown * shown
-        return low.mix(high, position).scaled(level) if level >= _DARK else OFF
-
-    return effect
-
-
-def music_drop(
-    source: AudioSource,
-    color: Color = WHITE,
-    flash: float = 0.4,
-    build: float = 3.0,
-    delay: float = 0.0,
-    sensitivity: float = DEFAULT_SENSITIVITY,
-) -> Effect:
-    """Open up as the music builds and flash when it comes back in after a lull.
-
-    ``build`` is the seconds the light takes to follow the energy, ``flash`` how long the flash lasts.
-    The thresholds are tuned on synthetic music, not on real tracks.
-    """
-    if flash <= 0.0:
-        raise ValueError("flash must be positive")
-    if build <= 0.0:
-        raise ValueError("build must be positive")
-    _set_delay(source, delay)
-    _check_sensitivity(source, sensitivity)
-    fast = 0.0
-    slow = 0.0
-    lull = 0.0
-    since = 0.0
-    lulled = False
-    seen = source.beats
-    began = -math.inf
-    last = 0.0
-
-    def effect(t: float) -> Color:
-        nonlocal fast, slow, lull, since, lulled, seen, began, last
-        step = max(0.0, t - last)
-        last = t
-        energy = _loudness(source.levels)
-        fast += (energy - fast) * (1.0 - math.exp(-step / build))
-        slow += (energy - slow) * (1.0 - math.exp(-step / _DROP_SLOW))
-        if slow > _LULL_FLOOR and fast < _LULL_RATIO * slow:
-            lull += step
-            since = 0.0
-            if lull >= _LULL_HOLD:
-                lulled = True
-        else:
-            lull = 0.0
-            if lulled:
-                since += step
-                if since >= _LULL_MEMORY:  # the lull is long forgotten: a beat now is not a drop
-                    lulled = False
-                    since = 0.0
-        arrived = source.beats != seen
-        seen = source.beats
-        if arrived and lulled and energy >= _DROP_ENERGY:
-            lulled = False
-            since = 0.0
-            began = t
-        if t - began < flash:
-            return color if ((t - began) * _FLASH_HZ) % 1.0 < 0.5 else OFF
-        glow = 0.15 * min(1.0, slow / _LULL_FLOOR) + 0.6 * fast
-        return color.scaled(glow) if glow >= _DARK else OFF
-
-    return effect
-
-
-def music_ambient(
-    source: AudioSource,
-    base: Color = WARM,
-    accent: Color = WHITE,
-    period: float = 6.0,
-    decay: float = 5.0,
-    delay: float = 0.0,
-    sensitivity: float = DEFAULT_SENSITIVITY,
-) -> Effect:
-    """A calm colour that breathes every ``period`` seconds, with ``accent`` flashing on the beats.
-
-    Never dark: in silence it is only the breathing.
-    """
-    if period <= 0.0:
-        raise ValueError("period must be positive")
-    if decay <= 0.0:
-        raise ValueError("decay must be positive")
-    _set_delay(source, delay)
-    _check_sensitivity(source, sensitivity)
-
-    def effect(t: float) -> Color:
-        swell = 0.5 - 0.5 * math.cos(2.0 * math.pi * t / period)
-        flash = math.exp(-decay * (source.clock() - source.last_beat))
-        return base.scaled(0.25 + 0.25 * swell).mix(accent, flash)
-
-    return effect
-
-
-def music_spectrum(source: AudioSource, release: float = 3.0, delay: float = 0.0) -> Effect:
-    """Bass drives red, mids green and treble blue; ``release`` is the fall rate per second."""
-    _set_delay(source, delay)
-    shown = [0.0, 0.0, 0.0]
-    last = 0.0
-
-    def effect(t: float) -> Color:
-        nonlocal last
-        fall = release * max(0.0, t - last)
-        last = t
-        levels = source.levels
-        for i, target in enumerate((levels.bass, levels.mid, levels.treble)):
-            shown[i] = max(target, shown[i] - fall)
-        # squared for contrast: quiet bands stay dim
-        return Color(*(round(255 * value * value) for value in shown))
-
-    return effect
-
-
-def music_volume(
-    source: AudioSource, color: Color = RED, release: float = 3.0, floor: float = 0.0, delay: float = 0.0
-) -> Effect:
-    """One colour whose brightness follows the loudness.
-
-    ``release`` is the fall rate per second; ``floor`` (0..1) is the brightness kept in silence.
-    """
-    _set_delay(source, delay)
-    if not 0.0 <= floor <= 1.0:
-        raise ValueError("floor must be within 0..1")
-    shown = 0.0
-    last = 0.0
-
-    def effect(t: float) -> Color:
-        nonlocal shown, last
-        shown = max(_loudness(source.levels), shown - release * max(0.0, t - last))
-        last = t
-        level = floor + (1.0 - floor) * shown * shown
-        return color.scaled(level) if level >= _DARK else OFF
-
-    return effect
-
-
-def music_stereo(
-    source: AudioSource,
-    left: Color = BLUE,
-    right: Color = RED,
-    width: float = 4.0,
-    release: float = 3.0,
-    delay: float = 0.0,
-) -> Effect:
-    """Blend between two colours by where the sound sits; brightness follows the loudness.
-
-    Sound on the left shows ``left``, on the right ``right``, and the middle is
-    an even mix. Music rarely leans far to one side, so ``width`` stretches the
-    measured position: at 4 a quarter of the way out already gives the pure colour.
-    """
-    _set_delay(source, delay)
-    if width <= 0.0:
-        raise ValueError("width must be positive")
-    shown = 0.0
-    position = 0.5
-    last = 0.0
-
-    def effect(t: float) -> Color:
-        nonlocal shown, position, last
-        step = max(0.0, t - last)
-        last = t
-        levels = source.levels
-        loudness = _loudness(levels)
-        faded = max(0.0, shown - release * step)
-        if loudness > 0.0:  # silence says nothing about the position, keep the last one
-            target = min(1.0, max(0.0, 0.5 + 0.5 * width * levels.balance))
-            if faded * faded < _DARK:
-                position = target  # out of the dark a sound starts where it is
-            else:
-                position += (target - position) * (1.0 - math.exp(-step / _PAN_SMOOTHING))
-        shown = max(loudness, faded)
-        level = shown * shown
-        return left.mix(right, position).scaled(level) if level >= _DARK else OFF
-
-    return effect

@@ -25,6 +25,8 @@ pub struct SimState {
     /// g, b, r, w, y as last written
     pub channels: [u8; 5],
     pub timers_answer: Vec<u8>,
+    /// The body of the last clock-set frame.
+    pub clock: Option<Vec<u8>>,
     /// Split answers into pieces of this size, like BLE notifications.
     pub chunk: Option<usize>,
     feed: Option<LinkFeed>,
@@ -123,6 +125,8 @@ impl Writer for SimWriter {
                 let offset =
                     (16..state.timers_answer.len()).step_by(44).find(|o| state.timers_answer[o + 32] == index).unwrap();
                 state.timers_answer[offset + 32..offset + 44].copy_from_slice(&record[32..44]);
+            } else if frame.kind == frame_type::SET && frame.command == Command::Status as u8 {
+                state.clock = Some(frame.body.clone());
             } else if frame.kind == frame_type::QUERY {
                 let data = match frame.command {
                     c if c == Command::Identify as u8 => reply(c, p::unhex("470c000000000000").unwrap()),

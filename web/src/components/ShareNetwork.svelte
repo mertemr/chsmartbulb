@@ -1,6 +1,6 @@
 <script lang="ts">
-  // In the app: offer this device's link to the bulb to the network, as the Python
-  // service does with --listen and --web.
+  // In the app: offer this device's link to the bulb to the network, as
+  // chsmartbulbd does with --listen and --web.
   import { native, type ShareStatus } from '../lib/native'
 
   let share = $state<ShareStatus | null>(null)

@@ -1,7 +1,7 @@
 """Command line front end: ``chsmartbulb --address AA:BB:CC:DD:EE:FF <command>``.
 
-Commands go to the background service when one is running (or to one on another
-machine with ``--host``), and straight to the bulb otherwise.
+Commands go to the background service (``chsmartbulbd``) when one is running, or to
+one on another machine with ``--host``, and straight to the bulb otherwise.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from . import catalog, client, config, effects, presence, service, web
+from . import _native, client, config, direct, effects
 from . import protocol as p
 from .bulb import ChSmartBulb
 from .color import NAMED, Color, parse_color
@@ -58,7 +58,8 @@ def _effect_params(args: argparse.Namespace) -> dict[str, Any]:
         params["color"] = args.color.to_hex()
     if args.period is not None:
         params["period"] = args.period
-    catalog.resolve(args.name, params)
+    if _native.load() is not None:  # else whoever plays it says what does not fit
+        effects.check(args.name, params)
     return params
 
 
@@ -104,17 +105,18 @@ def _print(command: str, reply: dict[str, Any]) -> None:
     if command == "status":
         reason = f" ({reply['problem']})" if reply.get("problem") else ""
         print(f"bulb:       {'connected' if reply['connected'] else 'not connected' + reason}")
-        print(f"audio:      {reply['audio']}")
-        if "screen" in reply:
-            print(f"screen:     {reply['screen']}")
-        print(f"light:      {'on' if reply['on'] else 'off'}")
-        print(f"colour:     {reply['color']}")
-        print(f"brightness: {round(reply['brightness'] * 100)}%")
-        if reply["effect"]:
-            running = "" if reply["playing"] else " (not running)"
-            print(f"effect:     {reply['effect']['name']} {reply['effect']['params'] or ''}{running}")
-        if reply["native"]:
-            print(f"native:     {reply['native']['name']} speed {reply['native']['speed']}")
+        if "on" in reply:  # a service remembers these; the bulb alone only reports its colour
+            print(f"audio:      {reply['audio']}")
+            if "screen" in reply:
+                print(f"screen:     {reply['screen']}")
+            print(f"light:      {'on' if reply['on'] else 'off'}")
+            print(f"colour:     {reply['color']}")
+            print(f"brightness: {round(reply['brightness'] * 100)}%")
+            if reply["effect"]:
+                running = "" if reply["playing"] else " (not running)"
+                print(f"effect:     {reply['effect']['name']} {reply['effect']['params'] or ''}{running}")
+            if reply["native"]:
+                print(f"native:     {reply['native']['name']} speed {reply['native']['speed']}")
         if "bulb" in reply:
             print(f"reported:   {reply['bulb']} (colour mix; the bulb does not report brightness)")
     elif command == "info":
@@ -133,8 +135,9 @@ def _print(command: str, reply: dict[str, Any]) -> None:
     elif command == "effects":
         for info in reply["effects"]:
             params = ", ".join(f"{key}={value}" for key, value in info["params"].items())
-            needs = f" [{info['needs']}]" if info["needs"] else ""
-            print(f"{info['name']:9s} {info['summary']}{needs}\n          {params}")
+            follows = [kind for kind in (info["needs"], info.get("also")) if kind]
+            needs = f" [{', '.join(follows)}]" if follows else ""
+            print(f"{info['name']:11s} {info['summary']}{needs}\n            {params}")
     elif command == "raw" and "answer" in reply:
         print(reply["answer"])
 
@@ -157,51 +160,8 @@ def _screen(args: argparse.Namespace) -> functools.partial[ScreenCapture]:
     return functools.partial(ScreenCapture, monitor=args.monitor)
 
 
-def _listen(text: str) -> tuple[str, int]:
-    host, separator, port = text.rpartition(":")
-    if not port.isdigit():
-        raise argparse.ArgumentTypeError("expected PORT or HOST:PORT")
-    return (host if separator else "0.0.0.0", int(port))
-
-
 def _remote(args: argparse.Namespace) -> client.Remote:
     return client.Remote.parse(args.host, args.token or "")
-
-
-async def _daemon(args: argparse.Namespace) -> None:
-    for option in ("listen", "web"):
-        if getattr(args, option) is not None and not (args.token or args.no_token):
-            raise SmartBulbError(f"--{option} needs a token: use --token, set ${config.TOKEN} or pass --no-token")
-    bulb = _bulb(args, auto_reconnect=False)
-    state_path = None if args.no_state else service.default_state_path()
-    looks = {
-        **({"lock": args.on_lock} if args.on_lock != "none" else {}),
-        **({"sleep": args.on_sleep, "shutdown": args.on_sleep} if args.on_sleep != "none" else {}),
-    }
-    daemon = service.BulbService(
-        bulb,
-        state_path=state_path,
-        fps=args.fps,
-        music_factory=_music(args),
-        screen_factory=_screen(args),
-        away_looks=looks,
-    )
-    watcher = None
-    tasks: set[asyncio.Task[Any]] = set()
-    if looks:
-
-        def tell(event: str) -> None:
-            task = asyncio.ensure_future(daemon.handle(presence.request_of(event)))
-            tasks.add(task)
-            task.add_done_callback(tasks.discard)
-
-        watcher = presence.PresenceWatcher(tell)
-        await watcher.start()
-    try:
-        await daemon.serve(args.socket, listen=args.listen, web=args.web, open_access=args.no_token, token=args.token)
-    finally:
-        if watcher is not None:
-            await watcher.stop()
 
 
 async def _agent(args: argparse.Namespace) -> None:
@@ -215,29 +175,20 @@ async def _agent(args: argparse.Namespace) -> None:
 
 
 async def _direct(args: argparse.Namespace, request: dict[str, Any]) -> dict[str, Any]:
+    if request["cmd"] == "effects":
+        if _native.load() is None:
+            raise SmartBulbError("the effects are listed by a running service, or with chsmartbulb-native installed")
+        return {"ok": True, "effects": effects.describe()}
     fps = getattr(args, "fps", effects.DEFAULT_FPS)
-    direct = service.BulbService(_bulb(args), fps=fps, music_factory=_music(args), screen_factory=_screen(args))
-    await direct.attach()
-    try:
-        reply = await direct.handle(request)
-        if reply["ok"] and request["cmd"] == "effect":
-            await direct.wait_effect()  # no service to keep it going, so run it here
-        return reply
-    finally:
-        await direct.close()
+    return {"ok": True, **await direct.run(_bulb(args), request, fps=fps, music=_music(args), screen=_screen(args))}
 
 
 async def _run(args: argparse.Namespace) -> None:
-    if args.command == "daemon":
-        await _daemon(args)
-        return
     if args.command in _AGENTS:
         await _agent(args)
         return
     request = _request(args)
-    if request["cmd"] == "effects":
-        reply: dict[str, Any] = {"ok": True, "effects": catalog.describe()}
-    elif args.host:
+    if args.host:
         reply = await client.call(_remote(args), request)
     elif not args.direct and await client.is_running(args.socket):
         reply = await client.call(args.socket, request)
@@ -273,7 +224,7 @@ def build_parser(settings: Mapping[str, str] | None = None) -> argparse.Argument
         help=f"how the bulb is reached (default rfcomm, or set ${config.TRANSPORT})",
     )
     parser.add_argument("--channel", type=int, default=p.RFCOMM_CHANNEL, help="RFCOMM channel (default 2)")
-    parser.add_argument("--socket", type=Path, default=service.default_socket_path(), help="service socket path")
+    parser.add_argument("--socket", type=Path, default=client.default_socket_path(), help="service socket path")
     parser.add_argument("--direct", action="store_true", help="talk to the bulb even if a service is running")
     parser.add_argument(
         "--host",
@@ -315,39 +266,6 @@ def build_parser(settings: Mapping[str, str] | None = None) -> argparse.Argument
     def with_brightness(cmd: argparse.ArgumentParser) -> None:
         cmd.add_argument("-b", "--brightness", type=_percent, default=None, metavar="PCT", help="0..100")
 
-    cmd = sub.add_parser("daemon", help="run the background service in the foreground")
-    cmd.add_argument("--fps", type=float, default=effects.DEFAULT_FPS, help="effect frame rate")
-    cmd.add_argument("--no-state", action="store_true", help="do not remember the light state across restarts")
-    cmd.add_argument(
-        "--listen",
-        type=_listen,
-        metavar="[HOST:]PORT",
-        help=f"also accept other machines on this address (needs a token; usual port {client.DEFAULT_PORT})",
-    )
-    cmd.add_argument(
-        "--web",
-        type=_listen,
-        metavar="[HOST:]PORT",
-        help=f"also serve the web interface on this address (needs a token; usual port {web.DEFAULT_PORT})",
-    )
-    cmd.add_argument(
-        "--no-token",
-        action="store_true",
-        help="let anyone who can reach --listen and --web use them, without a token",
-    )
-    cmd.add_argument(
-        "--on-lock",
-        choices=("none", "dim", "off"),
-        default="none",
-        help="what the light does while this computer's screen is locked, until it is unlocked (Windows)",
-    )
-    cmd.add_argument(
-        "--on-sleep",
-        choices=("none", "dim", "off"),
-        default="none",
-        help="what the light does while this computer sleeps or shuts down, until it is back (Windows)",
-    )
-
     sub.add_parser("audio-agent", help="analyse this machine's audio and feed it to a service (see --host)")
     sub.add_parser("screen-agent", help="watch this machine's screen and feed its colour to a service (see --host)")
 
@@ -384,7 +302,7 @@ def build_parser(settings: Mapping[str, str] | None = None) -> argparse.Argument
     with_brightness(cmd)
 
     cmd = sub.add_parser("effect", help="run an effect generated on this computer")
-    cmd.add_argument("name", choices=list(catalog.CATALOG))
+    cmd.add_argument("name", help="one of those `effects` lists")
     cmd.add_argument("-c", "--color", type=_color, default=None)
     cmd.add_argument("-p", "--period", type=float, default=None, help="seconds per cycle")
     cmd.add_argument("-s", "--set", type=_assignment, action="append", metavar="NAME=VALUE", help="other parameters")
@@ -410,14 +328,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     args = parser.parse_args(argv)
-    quiet = logging.INFO if args.command in ("daemon", *_AGENTS) else logging.WARNING
+    quiet = logging.INFO if args.command in _AGENTS else logging.WARNING
     logging.basicConfig(level=logging.DEBUG if args.verbose else quiet, format="%(levelname)s %(message)s")
     try:
         asyncio.run(_run(args))
     except KeyboardInterrupt:
         return 130
-    except asyncio.CancelledError:
-        return 0  # the service was asked to stop
     except (SmartBulbError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

@@ -1,22 +1,22 @@
 # The app
 
 `app/` is a Tauri 2 app for Android, Linux and Windows. It shows the same interface as the web
-page the Python service serves, and carries its own service: a Rust port of the Python one in
+page `chsmartbulbd` serves, and carries the same service inside it:
 [`crates/core`](../crates/core). Nothing else has to run; the phone or computer talks to the
 bulb itself.
 
 ```
-web/ (Svelte)  ── Link ──┬─ WebSocket ─ Python service (browser, or the app's "use a computer's service")
-                         └─ Tauri IPC ─ crates/core (Rust service, in the app)
+web/ (Svelte)  ── Link ──┬─ WebSocket ─ chsmartbulbd (browser, or the app's "use a computer's service")
+                         └─ Tauri IPC ─ crates/core (the service, in the app)
                                            │ Connector / Link
                      app/plugin ───────────┼──────────────────────────────┐
                      Android (Kotlin)      Linux                          Windows
                      BLE GATT, SPP         BLE (btleplug), RFCOMM socket  BLE (btleplug), Winsock RFCOMM
 ```
 
-The Rust service answers the same JSON requests and sends the same state events as
-`chsmartbulb.service`, so the interface does not know which one it talks to. Its tests mirror
-the Python service's against an in-memory bulb (`cargo test`).
+Either way it is the one service, answering the [socket protocol](usage.md#socket-protocol), so
+the interface does not know which it talks to. Its tests run against an in-memory bulb
+(`cargo test`).
 
 ## BLE or Classic
 
@@ -59,7 +59,7 @@ the Python package's `screen-agent`, with sharing turned on (see below).
 ## Sharing on the network
 
 *Share on the network* under Device makes the app a service for other machines, as
-`chsmartbulb daemon --listen 8377 --web 8378` does: browsers open the interface on port 8378,
+`chsmartbulbd --listen 8377 --web 8378` does: browsers open the interface on port 8378,
 and the Python package's command line and its `audio-agent` and `screen-agent` connect to port
 8377 with the token shown there. A phone holding the bulb can follow a computer's screen or
 sound this way. Nothing is encrypted, so keep it to a network you trust; *New token* turns away
@@ -89,10 +89,11 @@ effects keep playing with the screen off.
 
 ## Python bindings
 
-[`crates/python`](../crates/python) builds `chsmartbulb-native`, the Rust core for Python. When
-it is installed, the `chsmartbulb` package analyses sound in Rust: the audio agent and the
-sound-reactive effects then need no numpy, and the Python and Rust services are certain to hear
-music the same way (a test compares the two block by block). Without it nothing changes.
+[`crates/python`](../crates/python) builds `chsmartbulb-native`, the Rust core for Python. With
+it the `chsmartbulb` package plays the effects of the catalog itself, which exist in Rust only,
+and analyses sound in Rust: the audio agent then needs no numpy and hears music exactly as the
+service does (a test compares the two block by block). Without it the command line still drives
+the light and the service, and the agents still run.
 
 ```bash
 pip install "chsmartbulb-native @ git+https://github.com/mertemr/chsmartbulb#subdirectory=crates/python"

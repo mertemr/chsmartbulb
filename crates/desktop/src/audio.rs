@@ -1,7 +1,7 @@
 //! Sound capture on the desktop, for the effects that follow the music.
 //!
 //! Linux takes the monitor of the default output (or the default input, or a named
-//! source) through the `parec` tool, as the Python service does; PipeWire and PulseAudio
+//! source) through the `parec` tool; PipeWire and PulseAudio
 //! both offer it. Windows takes a WASAPI loopback of the default output (or the default input).
 
 use std::sync::{Arc, Mutex};

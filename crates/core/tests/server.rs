@@ -1,4 +1,4 @@
-//! The service on the network: the line protocol and the WebSocket, as the Python tools use them.
+//! The service on the network: the line protocol and the WebSocket, as the command line, the agents and the page use them.
 
 use std::net::SocketAddr;
 use std::sync::Arc;

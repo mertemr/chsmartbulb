@@ -48,6 +48,8 @@ export type EffectInfo = {
   params: Record<string, Value>
   schema: Record<string, ParamSchema>
   needs: 'audio' | 'screen' | null
+  /** A second input, for an effect that follows both. */
+  also?: 'audio' | 'screen' | null
 }
 
 export type Reply = { ok: boolean; error?: string; [key: string]: unknown }

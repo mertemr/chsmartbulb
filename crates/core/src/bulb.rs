@@ -305,6 +305,13 @@ impl Bulb {
         }
     }
 
+    /// Set the bulb's clock, which its stored timers run on.
+    ///
+    /// Built from vendor-app captures and not yet exercised on a real bulb.
+    pub async fn sync_clock(&self, when: p::ClockTime) -> Result<()> {
+        self.send(&p::set_clock(when)).await
+    }
+
     /// The 24 status bytes the vendor app polls every second; meaning unknown.
     pub async fn status_raw(&self) -> Result<Vec<u8>> {
         let frame = self.request(p::query(Command::Status)).await?;

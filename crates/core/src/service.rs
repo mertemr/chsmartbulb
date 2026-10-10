@@ -1,8 +1,7 @@
 //! The background service: keeps the connection, the running effect and the remembered state.
 //!
-//! A port of `chsmartbulb.service.BulbService`. Requests and replies are the same JSON
-//! objects as the Python service's socket protocol, so the web interface and the
-//! agents talk to either one without knowing which.
+//! Requests and replies are the JSON objects of the socket protocol (`docs/usage.md`),
+//! which is all the web interface, the command line and the agents know of it.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -639,8 +638,8 @@ fn timer_json(timer: &p::Timer) -> Value {
     })
 }
 
-fn needs_of(effect: &Value) -> Option<Needs> {
-    effect.get("name").and_then(Value::as_str).and_then(catalog::lookup).and_then(|info| info.needs)
+fn follows(effect: &Value, kind: Needs) -> bool {
+    effect.get("name").and_then(Value::as_str).and_then(catalog::lookup).is_some_and(|info| info.follows(kind))
 }
 
 impl Inner {
@@ -887,10 +886,11 @@ impl Inner {
         let name = spec.get("name").and_then(Value::as_str).unwrap_or_default();
         let params = spec.get("params").and_then(Value::as_object);
         let mut sources = Sources::default();
-        match needs_of(spec) {
-            Some(Needs::Audio) => sources.audio = Some(self.audio_source(held).await),
-            Some(Needs::Screen) => sources.screen = Some(self.screen_source(held).await),
-            None => {}
+        if follows(spec, Needs::Audio) {
+            sources.audio = Some(self.audio_source(held).await);
+        }
+        if follows(spec, Needs::Screen) {
+            sources.screen = Some(self.screen_source(held).await);
         }
         let effect = catalog::create(name, params, &sources)?;
         let inner = self.clone();
@@ -1020,7 +1020,7 @@ impl Inner {
 
     async fn feed_changed(self: &Arc<Self>, kind: Needs) {
         let effect = locked(&self.plan).effect.clone();
-        if self.playing() && effect.as_ref().and_then(needs_of) == Some(kind) {
+        if self.playing() && effect.as_ref().is_some_and(|effect| follows(effect, kind)) {
             if let Err(error) = self.apply(false, None).await {
                 log::warn!("cannot restart the effect on the other source: {error}");
             }

@@ -11,7 +11,7 @@ build/
 research/roi.npy
 research/cam.json
 
-# the web interface's toolchain; its built bundle in src/chsmartbulb/webui is tracked
+# the web interface's toolchain; its built bundle in web/bundle is tracked
 web/node_modules/
 
 # Rust

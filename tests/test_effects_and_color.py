@@ -2,13 +2,13 @@
 
 import asyncio
 import itertools
-from typing import Any, cast
 
 import pytest
 
 from chsmartbulb import BlockingLight, ChSmartBulb, Color, effects, parse_color
 from chsmartbulb.cli import main
-from fakes import FakeBulbTransport, RecordingLight
+from chsmartbulb.errors import SmartBulbError
+from fakes import FakeBulbTransport, RecordingLight, needs_native
 
 
 def test_color_parsing_and_validation():
@@ -33,39 +33,13 @@ def test_color_from_hsv_scaled_and_mix():
     assert Color(r=200).mix(Color(b=100), 0.5) == Color(r=100, b=50)
 
 
-def test_effect_functions():
-    red, blue = Color(r=255), Color(b=255)
-    breathe = effects.breathe(red, period=4)
-    assert breathe(0) == Color()
-    assert breathe(2) == red
-    assert 0 < breathe(1).r < 255
-    assert effects.hue_cycle(period=6)(2) == Color(g=255)
-    strobe = effects.strobe(red, hz=2)
-    assert (strobe(0.1), strobe(0.3)) == (red, Color())
-    assert effects.pulse(red, period=1)(0) == red
-    assert effects.pulse(red, period=1)(0.9).r < 20
-    assert effects.fade(red, blue, 2)(1) == Color(r=128, b=128)
-    assert effects.fade(red, blue, 2)(5) == blue
-    assert effects.dimmed(effects.solid(red), 0.5)(0) == Color(r=128)
-
-
-def test_sequence_holds_fades_and_loops():
-    red, blue = Color(r=255), Color(b=255)
-    seq = effects.sequence([(red, 1.0), (blue, 1.0, 1.0)])  # red 1 s, fade 1 s, blue 1 s
-    assert seq(0.5) == red
-    assert seq(1.5) == Color(r=128, b=128)
-    assert seq(2.5) == blue
-    assert seq(3.5) == red  # looped
-    once = effects.sequence([(red, 1.0), (blue, 1.0)], loop=False)
-    assert once(99) == blue
-    with pytest.raises(ValueError):
-        effects.sequence([])
-
-
 def test_play_sends_only_changed_frames_for_the_duration():
+    def strobe(t):  # 5 Hz, half of each cycle on
+        return Color(r=255) if (t * 5) % 1.0 < 0.5 else Color()
+
     async def scenario():
         light = RecordingLight()
-        await effects.play(light, effects.strobe(Color(r=255), hz=5), duration=0.7, fps=50)
+        await effects.play(light, strobe, duration=0.7, fps=50)
         return light.colors
 
     colors = asyncio.run(scenario())
@@ -80,9 +54,9 @@ def test_player_replaces_and_stops_effects():
     async def scenario():
         light = RecordingLight()
         player = effects.EffectPlayer(light, fps=200)
-        await player.start(effects.solid(Color(r=255)))
+        await player.start(lambda t: Color(r=255))
         await asyncio.sleep(0.03)
-        await player.start(effects.solid(Color(b=255)))
+        await player.start(lambda t: Color(b=255))
         await asyncio.sleep(0.03)
         assert player.is_playing
         await player.stop()
@@ -97,7 +71,7 @@ def test_effects_drive_a_real_bulb_object_through_its_brightness():
         transport = FakeBulbTransport()
         async with ChSmartBulb(transport) as bulb:
             await bulb.set_brightness(0.5)
-            await effects.play(bulb, effects.solid(Color(g=200)), duration=0.05, fps=50)
+            await effects.play(bulb, lambda t: Color(g=200), duration=0.05, fps=50)
         return transport.last_light
 
     assert asyncio.run(scenario())["g"] == 100
@@ -119,42 +93,58 @@ def test_cli_requires_an_address_when_no_service_is_running(monkeypatch, capsys,
     assert "no address given" in capsys.readouterr().err
 
 
-def test_sequence_steps_can_ease_their_fade():
-    black, white = Color(), Color(r=200, g=200, b=200)
-    for name, quarter in (("linear", 50), ("ease-in", 12), ("ease-out", 88), ("ease-in-out", 31)):
-        effect = effects.sequence([(black, 0.0), (white, 1.0, 4.0, name)])
-        assert effect(1.0).r == quarter, name  # a quarter of the way through the fade
-        assert (effect(0.0).r, effect(4.0).r) == (0, 200), name
-    with pytest.raises(ValueError, match="unknown easing"):
-        effects.sequence([(white, 1.0, 1.0, "bounce")])
+def test_the_catalog_is_the_rust_one():
+    needs_native()
+    described = {info["name"]: info for info in effects.describe()}
+    assert {"breathe", "custom", "music", "screen", "screensound"} <= set(described)
+    assert described["music"]["needs"] == "audio"
+    assert (described["screensound"]["needs"], described["screensound"]["also"]) == ("screen", "audio")
 
+    breathe = effects.create("breathe", {"color": Color(g=255), "period": "4"})  # text, as the command line gives it
+    assert (breathe(0), breathe(2)) == (Color(), Color(g=255))
+    assert effects.create("hue", {"period": 6})(2) == Color(g=255)
+    steps = [{"color": "#ff0000", "hold": 1.0}, {"color": "#0000ff", "hold": 1.0, "fade": 2.0}]
+    assert effects.create("custom", {"steps": steps})(2.0) == Color(r=128, b=128)
 
-def test_custom_effect_is_built_from_plain_steps():
-    steps = [
-        {"color": "#ff0000", "hold": 1.0},
-        {"color": "#0000ff", "hold": 1.0, "fade": 2.0, "ease": "ease-in-out"},
-    ]
-    effect = effects.custom(steps)
-    assert effect(0.5) == Color(r=255)
-    assert effect(2.0) == Color(r=128, b=128)  # halfway through the eased fade
-    assert effect(3.5) == Color(b=255)
-    assert effect(4.5) == Color(r=255)  # and round again
-    assert effects.custom(steps, speed=2.0)(1.0) == effect(2.0)
-
-
-def test_custom_effect_rejects_what_it_cannot_play():
-    step = {"color": "#ff0000", "hold": 1.0}
-    cases = (
-        ([], 1.0, "at least one step"),
-        ([step] * 17, 1.0, "at most 16"),
-        ([{"hold": 1.0}], 1.0, "needs a color"),
-        ([{**step, "hold": -1}], 1.0, "must not be negative"),
-        ([{**step, "ease": "bounce"}], 1.0, "unknown easing"),
-        ([{**step, "sparkle": 1}], 1.0, "has no 'sparkle'"),
-        (["red"], 1.0, "must be an object"),
-        ([{**step, "hold": 0}], 1.0, "longer than zero"),
-        ([step], 0, "speed must be positive"),
-    )
-    for steps, speed, fragment in cases:
+    effects.check("strobe", {"hz": 2})
+    for name, params, fragment in (
+        ("sparkle", None, "unknown effect"),
+        ("breathe", {"hz": 2}, "has no parameter"),
+        ("breathe", {"period": "soon"}, "must be a number"),
+        ("music", None, "no audio source"),
+    ):
         with pytest.raises(ValueError, match=fragment):
-            effects.custom(cast("Any", steps), speed)  # wrong on purpose
+            effects.create(name, params)
+    with pytest.raises(TypeError, match="cannot be an effect parameter"):
+        effects.create("breathe", {"period": object()})
+
+
+def test_effects_follow_the_sources_they_are_given():
+    needs_native()
+    seen = effects.screen_source()
+    screen = effects.create("screen", {"smoothing": 0, "saturation": 1, "white": 0}, screen=seen)
+    seen.push(255, 0, 0)
+    assert screen(0.1) == Color(r=255)
+    seen.clear()
+    assert screen(0.2) == Color()
+
+    heard = effects.audio_source()
+    volume = effects.create("volume", {"color": "00ff00"}, audio=heard)
+    assert volume(0.0) == Color()
+    heard.publish(0.0, 1.0, 0.0)
+    assert volume(0.1) == Color(g=255)
+    both = effects.create(
+        "screensound", {"smoothing": 0, "saturation": 1, "white": 0, "floor": 0.2}, audio=heard, screen=seen
+    )
+    seen.push(255, 0, 0)
+    assert both(0.0) == Color(r=255)
+    heard.clear()
+    assert both(60.0) == Color(r=51)  # silent: the floor
+
+
+def test_the_catalog_says_what_it_needs_when_the_rust_core_is_missing(monkeypatch):
+    monkeypatch.setenv("CHSMARTBULB_NATIVE", "0")
+    with pytest.raises(SmartBulbError, match="chsmartbulb-native"):
+        effects.describe()
+    with pytest.raises(SmartBulbError, match="chsmartbulb-native"):
+        effects.create("breathe")
