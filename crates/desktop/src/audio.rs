@@ -15,7 +15,8 @@ use chsmartbulb_core::Result;
 pub struct DesktopAudio {
     microphone: bool,
     device: Option<String>,
-    /// The one program to hear instead of the whole output (Linux).
+    /// The one program to hear instead of the whole output.
+    #[cfg(target_os = "linux")]
     app: Mutex<Option<String>>,
     running: Mutex<Option<Running>>,
 }
@@ -23,7 +24,13 @@ pub struct DesktopAudio {
 impl DesktopAudio {
     /// Listens to what the computer plays, or to its microphone.
     pub fn new(microphone: bool) -> Self {
-        Self { microphone, device: None, app: Mutex::new(None), running: Mutex::new(None) }
+        Self {
+            microphone,
+            device: None,
+            #[cfg(target_os = "linux")]
+            app: Mutex::new(None),
+            running: Mutex::new(None),
+        }
     }
 
     /// Capture from this source instead of the default one (a PulseAudio source name; Linux only).
