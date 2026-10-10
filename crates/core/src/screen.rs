@@ -1,10 +1,12 @@
-//! The `screen` effect: the light follows one colour that stands for a whole picture.
+//! The `screen` effects: the light follows one colour that stands for a whole picture,
+//! alone or moved by the sound.
 //!
 //! Capturing is left to whoever has the screen (an agent, or a platform layer);
 //! they push the reduced colour into a [`ScreenSource`].
 
 use std::sync::{Arc, Mutex};
 
+use crate::audio::AudioSource;
 use crate::color::{rgb_to_hsv, round, Color, OFF};
 use crate::effects::Effect;
 use crate::error::{invalid, Result};
@@ -14,6 +16,11 @@ use crate::error::{invalid, Result};
 const NEUTRAL: [f64; 3] = [0.48, 1.0, 0.23];
 /// How much more a fully saturated pixel counts than a grey one.
 const VIVID: f64 = 4.0;
+/// The furthest the sound may turn the hue, in degrees: beyond it the screen's colour is lost.
+pub const MAX_SHIFT: f64 = 60.0;
+/// Seconds for the hue to settle on where the sound's weight lies.
+const LEAN_SMOOTHING: f64 = 0.3;
+const DARK: f64 = 1.0 / 255.0;
 
 /// Captures per second.
 pub const RATE: f64 = 15.0;
@@ -102,18 +109,7 @@ pub fn balanced(color: Color, strength: f64) -> Color {
     Color::rgbw(channel(r), channel(g), channel(b), color.w)
 }
 
-/// Show the colour of the screen.
-///
-/// `smoothing` is how many seconds the light takes to follow a change. `saturation`
-/// multiplies the colourfulness. `white` (0..1) is how much of the grey goes to the
-/// white LEDs. `balance` (0..1) corrects the rest for the weak green LEDs.
-pub fn screen_follow(
-    source: Arc<ScreenSource>,
-    smoothing: f64,
-    saturation: f64,
-    white: f64,
-    balance: f64,
-) -> Result<Effect> {
+fn check(smoothing: f64, saturation: f64, white: f64, balance: f64) -> Result<()> {
     if smoothing < 0.0 {
         return Err(invalid("smoothing must not be negative"));
     }
@@ -126,9 +122,14 @@ pub fn screen_follow(
     if !(0.0..=1.0).contains(&balance) {
         return Err(invalid("balance must be within 0..1"));
     }
+    Ok(())
+}
+
+/// The screen's colour frame by frame, as hue (0..1), colourfulness and value.
+fn followed(source: Arc<ScreenSource>, smoothing: f64) -> impl FnMut(f64) -> (f64, f64, f64) + Send {
     let mut shown = [0.0f64; 3];
     let mut last = 0.0;
-    Ok(Box::new(move |t| {
+    move |t| {
         let step = (t - last).max(0.0);
         last = t;
         let blend = if smoothing > 0.0 { 1.0 - (-step / smoothing).exp() } else { 1.0 };
@@ -136,15 +137,96 @@ pub fn screen_follow(
         for (shown, channel) in shown.iter_mut().zip([target.r, target.g, target.b]) {
             *shown += (channel as f64 - *shown) * blend;
         }
-        let (hue, colourfulness, value) = rgb_to_hsv(shown[0] / 255.0, shown[1] / 255.0, shown[2] / 255.0);
+        rgb_to_hsv(shown[0] / 255.0, shown[1] / 255.0, shown[2] / 255.0)
+    }
+}
+
+/// Show the colour of the screen.
+///
+/// `smoothing` is how many seconds the light takes to follow a change. `saturation`
+/// multiplies the colourfulness. `white` (0..1) is how much of the grey goes to the
+/// white LEDs. `balance` (0..1) corrects the rest for the weak green LEDs.
+pub fn screen_follow(
+    source: Arc<ScreenSource>,
+    smoothing: f64,
+    saturation: f64,
+    white: f64,
+    balance: f64,
+) -> Result<Effect> {
+    check(smoothing, saturation, white, balance)?;
+    let mut screen = followed(source, smoothing);
+    Ok(Box::new(move |t| {
+        let (hue, colourfulness, value) = screen(t);
         let color = Color::from_hsv(hue * 360.0, (colourfulness * saturation).min(1.0), value);
         balanced(color.with_white(white), balance)
+    }))
+}
+
+/// How the sound moves the light of [`screen_sound`].
+#[derive(Debug, Clone, Copy)]
+pub struct Sway {
+    /// The brightness (0..1) kept in silence.
+    pub floor: f64,
+    /// How fast the brightness falls after a loud moment, per second.
+    pub release: f64,
+    /// The most degrees the hue turns: one way for bass-heavy sound, the other for bright sound.
+    pub shift: f64,
+    /// Seconds the sound is held back, as for the sound effects.
+    pub delay: f64,
+}
+
+/// Show the colour of the screen, as bright as the sound is loud.
+///
+/// The colour is that of [`screen_follow`]; `sway` is what the sound does to it.
+pub fn screen_sound(
+    screen: Arc<ScreenSource>,
+    audio: Arc<AudioSource>,
+    smoothing: f64,
+    saturation: f64,
+    white: f64,
+    balance: f64,
+    sway: Sway,
+) -> Result<Effect> {
+    check(smoothing, saturation, white, balance)?;
+    let Sway { floor, release, shift, delay } = sway;
+    if !(0.0..=1.0).contains(&floor) {
+        return Err(invalid("floor must be within 0..1"));
+    }
+    if release <= 0.0 {
+        return Err(invalid("release must be positive"));
+    }
+    if !(0.0..=MAX_SHIFT).contains(&shift) {
+        return Err(invalid(format!("shift must be within 0..{MAX_SHIFT} degrees")));
+    }
+    audio.set_delay(delay)?;
+    let mut screen = followed(screen, smoothing);
+    let mut loud = 0.0f64;
+    let mut lean = 0.0f64;
+    let mut last = 0.0;
+    Ok(Box::new(move |t| {
+        let step = (t - last).max(0.0);
+        last = t;
+        let levels = audio.heard().levels;
+        let loudest = levels.bass.max(levels.mid).max(levels.treble);
+        loud = loudest.max(loud - release * step);
+        // -1 all bass, +1 all treble; silence leans nowhere, so the screen's own colour comes back
+        let total = levels.bass + levels.mid + levels.treble;
+        let target = if total > 0.0 { (levels.treble - levels.bass) / total } else { 0.0 };
+        lean += (target - lean) * (1.0 - (-step / LEAN_SMOOTHING).exp());
+        let level = floor + (1.0 - floor) * loud * loud; // squared for contrast, as the sound effects do
+        if level < DARK {
+            return OFF; // scaled() never rounds a lit channel to zero
+        }
+        let (hue, colourfulness, value) = screen(t);
+        let color = Color::from_hsv(hue * 360.0 + shift * lean, (colourfulness * saturation).min(1.0), value);
+        balanced(color.with_white(white), balance).scaled(level)
     }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::{monotonic, Levels};
     use crate::color::RED;
 
     #[test]
@@ -169,6 +251,55 @@ mod tests {
         source.push(RED);
         let mut effect = screen_follow(source, 0.0, 1.0, 0.0, 0.0).unwrap();
         assert_eq!(effect(0.1), RED);
+    }
+
+    fn sway(floor: f64, shift: f64) -> Sway {
+        Sway { floor, release: 2.0, shift, delay: 0.0 }
+    }
+
+    #[test]
+    fn sound_sets_the_brightness_of_the_screen_colour() {
+        let (screen, audio) = (ScreenSource::new(), AudioSource::new(monotonic()));
+        screen.push(RED);
+        let mut effect = screen_sound(screen.clone(), audio.clone(), 0.0, 1.0, 0.0, 0.0, sway(0.2, 0.0)).unwrap();
+        assert_eq!(effect(0.1), Color::rgb(51, 0, 0)); // silent: the floor
+        audio.publish(Levels { mid: 1.0, ..Levels::default() }, 0.0);
+        assert_eq!(effect(0.2), RED);
+        audio.publish(Levels::default(), 0.0);
+        assert_eq!(effect(0.45), Color::rgb(102, 0, 0)); // fallen to 0.5, squared, above the floor
+        assert_eq!(effect(5.0), Color::rgb(51, 0, 0));
+        let mut dark = screen_sound(screen, audio, 0.0, 1.0, 0.0, 0.0, sway(0.0, 0.0)).unwrap();
+        assert_eq!(dark(0.1), OFF);
+    }
+
+    #[test]
+    fn sound_turns_the_hue_a_little_either_way() {
+        let (screen, audio) = (ScreenSource::new(), AudioSource::new(monotonic()));
+        screen.push(Color::rgb(0, 255, 0));
+        let mut effect = screen_sound(screen, audio.clone(), 0.0, 1.0, 0.0, 0.0, sway(1.0, 30.0)).unwrap();
+        assert_eq!(effect(0.1), Color::rgb(0, 255, 0)); // silence leaves the colour alone
+        audio.publish(Levels { treble: 1.0, ..Levels::default() }, 0.0);
+        let bright = effect(10.0); // 30 degrees towards cyan
+        assert!((bright.r, bright.g) == (0, 255) && (126..=129).contains(&bright.b), "{bright:?}");
+        audio.publish(Levels { bass: 1.0, ..Levels::default() }, 0.0);
+        let deep = effect(20.0); // and 30 towards yellow
+        assert!((deep.g, deep.b) == (255, 0) && (126..=129).contains(&deep.r), "{deep:?}");
+        audio.publish(Levels { bass: 1.0, treble: 1.0, ..Levels::default() }, 0.0);
+        assert_eq!(effect(30.0), Color::rgb(0, 255, 0));
+    }
+
+    #[test]
+    fn sound_refuses_what_does_not_fit() {
+        let (screen, audio) = (ScreenSource::new(), AudioSource::new(monotonic()));
+        for bad in [
+            Sway { floor: 2.0, ..sway(0.3, 10.0) },
+            Sway { release: 0.0, ..sway(0.3, 10.0) },
+            Sway { shift: 90.0, ..sway(0.3, 10.0) },
+            Sway { delay: 5.0, ..sway(0.3, 10.0) },
+        ] {
+            assert!(screen_sound(screen.clone(), audio.clone(), 0.2, 1.0, 1.0, 0.0, bad).is_err());
+        }
+        assert!(screen_sound(screen, audio, -1.0, 1.0, 1.0, 0.0, sway(0.3, 10.0)).is_err());
     }
 
     #[test]

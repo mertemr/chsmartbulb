@@ -12,7 +12,7 @@ use crate::audio::{self, AudioSource, DEFAULT_SENSITIVITY, MAX_DELAY};
 use crate::color::{parse_color, Color, BLUE, GREEN, RED, WHITE};
 use crate::effects::{self, Effect, EASINGS, MAX_STEPS, WARM};
 use crate::error::{invalid, Result};
-use crate::screen::{self, ScreenSource};
+use crate::screen::{self, ScreenSource, Sway, MAX_SHIFT};
 
 /// The input an effect follows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -65,10 +65,20 @@ type Build = fn(&Resolved, &Sources) -> Result<Effect>;
 pub struct EffectInfo {
     pub name: &'static str,
     pub summary: &'static str,
+    /// The input an effect follows, and the group front ends list it under.
     pub needs: Option<Needs>,
+    /// A second input, for an effect that follows both.
+    pub also: Option<Needs>,
     defaults: fn() -> Vec<(&'static str, Param)>,
     build: Build,
     ranges: &'static [(&'static str, (f64, f64, f64))],
+}
+
+impl EffectInfo {
+    /// Whether the effect follows `kind`.
+    pub fn follows(&self, kind: Needs) -> bool {
+        self.needs == Some(kind) || self.also == Some(kind)
+    }
 }
 
 /// Slider limits a front end offers per parameter: lowest, highest, step.
@@ -127,6 +137,7 @@ pub static CATALOG: &[EffectInfo] = &[
         name: "breathe",
         summary: "swell and fade",
         needs: None,
+        also: None,
         defaults: || {
             vec![("color", Param::Color(Some(RED))), ("period", Param::Number(4.0)), ("floor", Param::Number(0.0))]
         },
@@ -137,6 +148,7 @@ pub static CATALOG: &[EffectInfo] = &[
         name: "hue",
         summary: "walk around the colour wheel",
         needs: None,
+        also: None,
         defaults: || vec![("period", Param::Number(10.0)), ("saturation", Param::Number(1.0))],
         build: |p, _| Ok(effects::hue_cycle(n(p, "period"), n(p, "saturation"), 1.0)),
         ranges: &[],
@@ -145,6 +157,7 @@ pub static CATALOG: &[EffectInfo] = &[
         name: "pulse",
         summary: "flash, then decay",
         needs: None,
+        also: None,
         defaults: || {
             vec![("color", Param::Color(Some(RED))), ("period", Param::Number(1.0)), ("decay", Param::Number(4.0))]
         },
@@ -155,6 +168,7 @@ pub static CATALOG: &[EffectInfo] = &[
         name: "strobe",
         summary: "hard blinking",
         needs: None,
+        also: None,
         defaults: || vec![("color", Param::Color(Some(RED))), ("hz", Param::Number(5.0)), ("duty", Param::Number(0.5))],
         build: |p, _| Ok(effects::strobe(colour(p, "color"), n(p, "hz"), n(p, "duty"), crate::color::OFF)),
         ranges: &[],
@@ -163,6 +177,7 @@ pub static CATALOG: &[EffectInfo] = &[
         name: "candle",
         summary: "uneven flicker",
         needs: None,
+        also: None,
         defaults: || vec![("color", Param::Color(Some(WARM))), ("depth", Param::Number(0.6))],
         build: |p, _| Ok(effects::candle(colour(p, "color"), n(p, "depth"))),
         ranges: &[],
@@ -171,6 +186,7 @@ pub static CATALOG: &[EffectInfo] = &[
         name: "palette",
         summary: "drift through a list of colours",
         needs: None,
+        also: None,
         defaults: || {
             vec![
                 ("colors", Param::Colors(vec![RED, GREEN, BLUE])),
@@ -188,6 +204,7 @@ pub static CATALOG: &[EffectInfo] = &[
         name: "police",
         summary: "alternate red and blue",
         needs: None,
+        also: None,
         defaults: || vec![("period", Param::Number(1.0))],
         build: |p, _| effects::police(n(p, "period")),
         ranges: &[],
@@ -196,6 +213,7 @@ pub static CATALOG: &[EffectInfo] = &[
         name: "custom",
         summary: "your own colours, timings and fades",
         needs: None,
+        also: None,
         defaults: || vec![("steps", Param::Steps(custom_steps())), ("speed", Param::Number(1.0))],
         build: |p, _| match p.get("steps") {
             Some(Param::Steps(steps)) => effects::custom(steps, n(p, "speed")),
@@ -207,6 +225,7 @@ pub static CATALOG: &[EffectInfo] = &[
         name: "music",
         summary: "flash on the beat of the computer's audio",
         needs: Some(Needs::Audio),
+        also: None,
         defaults: || {
             vec![
                 ("color", Param::Color(None)),
@@ -224,6 +243,7 @@ pub static CATALOG: &[EffectInfo] = &[
         name: "spectrum",
         summary: "bass, mids, treble as red, green, blue",
         needs: Some(Needs::Audio),
+        also: None,
         defaults: || vec![("release", Param::Number(3.0)), ("delay", Param::Number(0.0))],
         build: |p, s| audio::music_spectrum(audio(s, "spectrum")?, n(p, "release"), n(p, "delay")),
         ranges: &[],
@@ -232,6 +252,7 @@ pub static CATALOG: &[EffectInfo] = &[
         name: "volume",
         summary: "one colour, as bright as the audio is loud",
         needs: Some(Needs::Audio),
+        also: None,
         defaults: || {
             vec![
                 ("color", Param::Color(Some(RED))),
@@ -249,6 +270,7 @@ pub static CATALOG: &[EffectInfo] = &[
         name: "stereo",
         summary: "blend two colours by where the sound sits between left and right",
         needs: Some(Needs::Audio),
+        also: None,
         defaults: || {
             vec![
                 ("left", Param::Color(Some(audio::STEREO_LEFT))),
@@ -275,6 +297,7 @@ pub static CATALOG: &[EffectInfo] = &[
         name: "beathue",
         summary: "the colour turns on every beat, the brightness follows the bass",
         needs: Some(Needs::Audio),
+        also: None,
         defaults: || {
             vec![
                 ("step", Param::Number(47.0)),
@@ -302,6 +325,7 @@ pub static CATALOG: &[EffectInfo] = &[
         name: "tempo",
         summary: "warm for slow music, cool for fast, by the gaps between beats",
         needs: Some(Needs::Audio),
+        also: None,
         defaults: || {
             vec![
                 ("slow", Param::Number(80.0)),
@@ -327,6 +351,7 @@ pub static CATALOG: &[EffectInfo] = &[
         name: "centroid",
         summary: "blend two colours by whether the sound is bass-heavy or bright",
         needs: Some(Needs::Audio),
+        also: None,
         defaults: || {
             vec![
                 ("low", Param::Color(Some(RED))),
@@ -352,6 +377,7 @@ pub static CATALOG: &[EffectInfo] = &[
         name: "drop",
         summary: "opens up as the music builds, flashes when it drops back in",
         needs: Some(Needs::Audio),
+        also: None,
         defaults: || {
             vec![
                 ("color", Param::Color(Some(WHITE))),
@@ -377,6 +403,7 @@ pub static CATALOG: &[EffectInfo] = &[
         name: "ambient",
         summary: "a calm colour that breathes, an accent on the beats; never dark",
         needs: Some(Needs::Audio),
+        also: None,
         defaults: || {
             vec![
                 ("base", Param::Color(Some(WARM))),
@@ -404,6 +431,7 @@ pub static CATALOG: &[EffectInfo] = &[
         name: "screen",
         summary: "follow the colour of the screen",
         needs: Some(Needs::Screen),
+        also: None,
         defaults: || {
             vec![
                 ("smoothing", Param::Number(0.2)),
@@ -418,6 +446,42 @@ pub static CATALOG: &[EffectInfo] = &[
             screen::screen_follow(source, n(p, "smoothing"), n(p, "saturation"), n(p, "white"), n(p, "balance"))
         },
         ranges: &[("saturation", (0.0, 3.0, 0.1))],
+    },
+    EffectInfo {
+        name: "screensound",
+        summary: "the colour of the screen, as bright as the sound is loud",
+        needs: Some(Needs::Screen),
+        also: Some(Needs::Audio),
+        defaults: || {
+            vec![
+                ("smoothing", Param::Number(0.2)),
+                ("saturation", Param::Number(1.5)),
+                ("white", Param::Number(1.0)),
+                ("balance", Param::Number(0.0)),
+                ("floor", Param::Number(0.35)),
+                ("release", Param::Number(2.0)),
+                ("shift", Param::Number(12.0)),
+                ("delay", Param::Number(0.0)),
+            ]
+        },
+        build: |p, s| {
+            let source = s
+                .screen
+                .clone()
+                .ok_or_else(|| invalid("effect \"screensound\" was given no screen source to follow"))?;
+            let sway =
+                Sway { floor: n(p, "floor"), release: n(p, "release"), shift: n(p, "shift"), delay: n(p, "delay") };
+            screen::screen_sound(
+                source,
+                audio(s, "screensound")?,
+                n(p, "smoothing"),
+                n(p, "saturation"),
+                n(p, "white"),
+                n(p, "balance"),
+                sway,
+            )
+        },
+        ranges: &[("saturation", (0.0, 3.0, 0.1)), ("shift", (0.0, MAX_SHIFT, 1.0))],
     },
 ];
 
@@ -546,6 +610,7 @@ pub fn describe() -> Value {
                     "params": params,
                     "schema": schemas,
                     "needs": info.needs.map(Needs::as_str),
+                    "also": info.also.map(Needs::as_str),
                 })
             })
             .collect(),
@@ -594,19 +659,39 @@ mod tests {
         let sources = Sources { audio: Some(AudioSource::new(audio::monotonic())), screen: None };
         assert!(create("music", None, &sources).is_ok());
         assert!(create("hue", None, &Sources::default()).is_ok());
+        assert!(create("screensound", None, &sources).is_err()); // it follows the screen as well
+        let sources = Sources { screen: Some(ScreenSource::new()), ..sources };
+        assert!(create("screensound", None, &sources).is_ok());
     }
 
     #[test]
     fn describe_matches_the_python_shape() {
         let described = describe();
         let all = described.as_array().unwrap();
-        assert_eq!(all.len(), 18);
+        assert_eq!(all.len(), 19);
         let names: Vec<&str> = all.iter().map(|e| e["name"].as_str().unwrap()).collect();
         assert_eq!(
             names,
             [
-                "breathe", "hue", "pulse", "strobe", "candle", "palette", "police", "custom", "music", "spectrum",
-                "volume", "stereo", "beathue", "tempo", "centroid", "drop", "ambient", "screen"
+                "breathe",
+                "hue",
+                "pulse",
+                "strobe",
+                "candle",
+                "palette",
+                "police",
+                "custom",
+                "music",
+                "spectrum",
+                "volume",
+                "stereo",
+                "beathue",
+                "tempo",
+                "centroid",
+                "drop",
+                "ambient",
+                "screen",
+                "screensound"
             ]
         );
         let range = |key: &str| all.iter().find_map(|e| e["schema"].get(key)).unwrap().clone();
@@ -624,6 +709,10 @@ mod tests {
         assert_eq!(beathue["schema"]["step"], json!({"type": "number", "min": 1.0, "max": 180.0, "step": 1.0}));
         let screen = all.iter().find(|e| e["name"] == "screen").unwrap();
         assert_eq!(screen["schema"]["saturation"]["max"], 3.0);
+        assert_eq!(screen["also"], Value::Null);
+        let both = all.iter().find(|e| e["name"] == "screensound").unwrap();
+        assert_eq!((&both["needs"], &both["also"]), (&json!("screen"), &json!("audio")));
+        assert_eq!(both["schema"]["shift"], json!({"type": "number", "min": 0.0, "max": 60.0, "step": 1.0}));
         let custom = all.iter().find(|e| e["name"] == "custom").unwrap();
         assert_eq!(custom["schema"]["steps"]["most"], 16);
         assert_eq!(custom["params"]["steps"][0]["ease"], "ease-in-out");

@@ -265,6 +265,26 @@ async fn a_service_that_cannot_capture_its_screen_offers_no_monitors() {
 }
 
 #[tokio::test]
+async fn an_effect_of_screen_and_sound_follows_both() {
+    let fake = FakeBulb::new();
+    let capture = Arc::new(FakeCapture::default());
+    let service =
+        Service::builder(Bulb::new(fake.connector())).options(options()).audio_capture(capture.clone()).build();
+    service.attach().await.unwrap();
+    assert_eq!(ask(&service, json!({"cmd": "effect", "name": "screensound"})).await["ok"], true);
+    assert!(capture.running.load(Ordering::SeqCst));
+    // a screen agent restarts it on its feed, and the sound is still listened to here
+    let (told, _heard) = tokio::sync::mpsc::unbounded_channel();
+    let agent = service.agent_joined(Needs::Screen, told).await;
+    assert!(capture.running.load(Ordering::SeqCst));
+    assert_eq!(service.state()["playing"], true);
+    service.agent_left(Needs::Screen, &agent).await;
+    ask(&service, json!({"cmd": "stop"})).await;
+    assert!(!capture.running.load(Ordering::SeqCst));
+    service.close().await;
+}
+
+#[tokio::test]
 async fn native_effect_and_bulb_queries() {
     let fake = FakeBulb::new();
     fake.with(|s| s.chunk = Some(20)); // answers arrive in pieces, as BLE notifications do
@@ -364,7 +384,7 @@ async fn effects_reply_describes_every_parameter_and_the_native_effects() {
     let names: Vec<&str> = reply["native"]["names"].as_array().unwrap().iter().map(|n| n.as_str().unwrap()).collect();
     assert!(names.contains(&"breathing") && !names.contains(&"fixed"));
     assert_eq!(reply["native"]["speed"], json!([0, 15]));
-    assert_eq!(reply["effects"].as_array().unwrap().len(), 18);
+    assert_eq!(reply["effects"].as_array().unwrap().len(), 19);
     service.close().await;
 }
 
