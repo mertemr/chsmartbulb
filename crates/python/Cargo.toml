@@ -1,6 +1,6 @@
 [package]
 name = "chsmartbulb-native"
-description = "Python bindings to the Rust core of chsmartbulb: frame codec, sound analysis, effect catalog"
+description = "Python bindings to the Rust core of chsmartbulb: effect catalog, sound analysis, frame codec"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
