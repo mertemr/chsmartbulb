@@ -95,6 +95,9 @@ struct Args {
     /// Audio source for sound-reactive effects (default: monitor of the default output; Linux)
     #[arg(long, value_name = "SOURCE", env = "CHSMARTBULB_AUDIO_DEVICE")]
     audio_device: Option<String>,
+    /// Follow the sound of this one program instead of everything the computer plays (Linux)
+    #[arg(long, value_name = "NAME", env = "CHSMARTBULB_AUDIO_APP")]
+    audio_app: Option<String>,
     /// Listen to the microphone instead of what the computer plays
     #[arg(long)]
     mic: bool,
@@ -244,6 +247,7 @@ async fn run(args: Args) -> Result<(), String> {
         fps: args.fps,
         away_looks: looks.clone(),
         monitor: args.monitor,
+        audio_app: args.audio_app.clone(),
         ..Options::default()
     };
     let mut builder = Service::builder(Bulb::new(connector(&args)?)).options(options);

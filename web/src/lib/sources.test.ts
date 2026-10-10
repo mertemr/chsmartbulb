@@ -9,7 +9,7 @@ const areas = [
 ]
 
 test('the machine itself feeds the light when no agent does', () => {
-  expect(feedOf(base, 'audio', true)).toEqual({ agent: false, from: 'this device', monitor: null })
+  expect(feedOf(base, 'audio', true)).toEqual({ agent: false, from: 'this device', monitor: null, app: null })
   expect(feedText('audio', feedOf(base, 'audio', false))).toBe('Sound: the service’s computer')
   expect(feedOf(null, 'screen', false).agent).toBe(false)
   // the app has no screen of its own to follow
@@ -36,4 +36,11 @@ test('an agent is named, and its monitor shown only when it has a choice', () =>
 test('the services own screen shows the monitor it follows', () => {
   const state = { ...base, localMonitors: areas, localMonitor: 0 } as State
   expect(feedText('screen', feedOf(state, 'screen', false))).toBe('Screen: the service’s computer · all monitors')
+})
+
+test('the one program whose sound is followed is named', () => {
+  const state = { ...base, localApp: 'Spotify' } as State
+  expect(feedText('audio', feedOf(state, 'audio', false))).toBe('Sound: the service’s computer · Spotify')
+  expect(feedText('audio', feedOf({ ...base, localApp: null } as State, 'audio', false))).toBe('Sound: the service’s computer')
+  expect(feedText('screen', feedOf(state, 'screen', false))).toBe('Screen: the service’s computer')
 })

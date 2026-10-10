@@ -1,7 +1,7 @@
 //! The background service against a fake bulb; mirrors `tests/test_service.py`.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -117,6 +117,9 @@ async fn finite_effect_returns_to_the_plain_colour_when_done() {
 struct FakeCapture {
     running: AtomicBool,
     starts: AtomicUsize,
+    /// The programs it says are playing; it follows none alone while this is empty.
+    apps: Vec<String>,
+    followed: Mutex<Option<String>>,
 }
 
 #[async_trait]
@@ -130,6 +133,66 @@ impl AudioCapture for FakeCapture {
     async fn stop(&self) {
         self.running.store(false, Ordering::SeqCst);
     }
+
+    fn follows_apps(&self) -> bool {
+        !self.apps.is_empty()
+    }
+
+    async fn apps(&self) -> Result<Vec<String>> {
+        Ok(self.apps.clone())
+    }
+
+    fn follow(&self, app: Option<String>) {
+        *self.followed.lock().unwrap() = app;
+    }
+}
+
+#[tokio::test]
+async fn sound_of_one_program_is_followed_alone() {
+    let fake = FakeBulb::new();
+    let capture = Arc::new(FakeCapture { apps: vec!["mpv".into(), "Spotify".into()], ..FakeCapture::default() });
+    let chosen = Options { audio_app: Some("mpv".into()), ..options() };
+    let service = Service::builder(Bulb::new(fake.connector())).options(chosen).audio_capture(capture.clone()).build();
+    service.attach().await.unwrap();
+    let followed = || capture.followed.lock().unwrap().clone();
+    assert_eq!(followed().as_deref(), Some("mpv"));
+    let listed = ask(&service, json!({"cmd": "apps"})).await;
+    assert_eq!(listed["apps"], json!(["mpv", "Spotify"]));
+    assert_eq!(listed["app"], "mpv");
+
+    ask(&service, json!({"cmd": "effect", "name": "music"})).await;
+    assert_eq!(capture.starts.load(Ordering::SeqCst), 1);
+    // choosing the same one again leaves the capture alone; another one reopens it
+    ask(&service, json!({"cmd": "listen", "app": "mpv"})).await;
+    assert_eq!(capture.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(ask(&service, json!({"cmd": "listen", "app": "Spotify"})).await["ok"], true);
+    assert_eq!(followed().as_deref(), Some("Spotify"));
+    assert_eq!(capture.starts.load(Ordering::SeqCst), 2);
+    assert!(capture.running.load(Ordering::SeqCst));
+    assert_eq!(ask(&service, json!({"cmd": "status"})).await["localApp"], "Spotify");
+
+    ask(&service, json!({"cmd": "listen", "app": null})).await;
+    assert_eq!(followed(), None);
+    assert_eq!(capture.starts.load(Ordering::SeqCst), 3);
+    assert_eq!(ask(&service, json!({"cmd": "status"})).await["localApp"], Value::Null);
+    service.close().await;
+}
+
+#[tokio::test]
+async fn capture_that_hears_everything_only_offers_no_programs() {
+    let fake = FakeBulb::new();
+    let capture = Arc::new(FakeCapture::default());
+    let chosen = Options { audio_app: Some("mpv".into()), ..options() };
+    let service = Service::builder(Bulb::new(fake.connector())).options(chosen).audio_capture(capture.clone()).build();
+    service.attach().await.unwrap();
+    assert_eq!(*capture.followed.lock().unwrap(), None);
+    assert!(ask(&service, json!({"cmd": "status"})).await.get("localApp").is_none());
+    for request in [json!({"cmd": "apps"}), json!({"cmd": "listen", "app": "mpv"})] {
+        let reply = ask(&service, request).await;
+        assert_eq!(reply["ok"], false);
+        assert!(reply["error"].as_str().unwrap().contains("one program"));
+    }
+    service.close().await;
 }
 
 #[tokio::test]

@@ -17,6 +17,7 @@ the bulb's protocol, which was worked out and documented here.
   candle to a thunderstorm and a sunrise, a step editor for your own, twelve that follow the
   music, and four that follow the colour of a screen
 - A sleep timer that dims whatever is showing and then switches it off
+- On Linux, the sound of one program alone if you like, so a call does not move the light
 - A background service (`chsmartbulbd`, one Rust program for Linux and Windows) that keeps the
   connection, runs effects and restores the light when the bulb comes back after losing power
 - A web interface served by that service, for phones and other computers on the network

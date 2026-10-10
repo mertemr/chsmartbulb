@@ -36,6 +36,16 @@ pub trait AudioCapture: Send + Sync {
     fn alive(&self) -> bool {
         true
     }
+    /// Whether the sound of one program can be followed alone, with [`AudioCapture::follow`].
+    fn follows_apps(&self) -> bool {
+        false
+    }
+    /// The programs playing sound now, by name.
+    async fn apps(&self) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+    /// Hear only this program from the next start on; `None` is everything this device plays.
+    fn follow(&self, _app: Option<String>) {}
 }
 
 /// Something on this device that can see a screen, started while an effect needs it.
@@ -179,6 +189,8 @@ pub struct Options {
     pub away_looks: HashMap<String, AwayLook>,
     /// Which of this device's monitors the screen effect follows, until a request chooses another.
     pub monitor: i64,
+    /// The one program whose sound the effects follow, where the capture can single one out.
+    pub audio_app: Option<String>,
 }
 
 impl Default for Options {
@@ -191,6 +203,7 @@ impl Default for Options {
             save_delay: Duration::from_secs(1),
             away_looks: HashMap::new(),
             monitor: crate::screen::PRIMARY,
+            audio_app: None,
         }
     }
 }
@@ -271,6 +284,8 @@ struct Inner {
     /// What the local screen capture offers; empty when there is none or it cannot capture.
     local_monitors: Vec<Value>,
     local_monitor: AtomicI64,
+    /// The one program the local sound capture follows; `None` is everything.
+    local_app: StdMutex<Option<String>>,
     pending_save: StdMutex<Option<JoinHandle<()>>>,
     away_looks: StdMutex<HashMap<String, AwayLook>>,
     /// Why the computer is away, while it is: the light shows the away look, the plan stays as it is.
@@ -339,6 +354,14 @@ impl Builder {
         let away_looks = self.options.away_looks.clone();
         let local_monitors = self.local_screen.as_ref().map(|capture| capture.monitors()).unwrap_or_default();
         let local_monitor = self.options.monitor;
+        let local_app = self
+            .options
+            .audio_app
+            .clone()
+            .filter(|_| self.local_audio.as_ref().is_some_and(|capture| capture.follows_apps()));
+        if let (Some(capture), Some(app)) = (&self.local_audio, &local_app) {
+            capture.follow(Some(app.clone()));
+        }
         let inner = Arc::new(Inner {
             bulb: self.bulb,
             options: self.options,
@@ -362,6 +385,7 @@ impl Builder {
             local_screen: self.local_screen,
             local_monitors,
             local_monitor: AtomicI64::new(local_monitor),
+            local_app: StdMutex::new(local_app),
             pending_save: StdMutex::new(None),
             away_looks: StdMutex::new(away_looks),
             away: StdMutex::new(None),
@@ -605,7 +629,7 @@ impl Service {
     }
 }
 
-const COMMANDS: [&str; 18] = [
+const COMMANDS: [&str; 20] = [
     "status",
     "on",
     "off",
@@ -621,6 +645,8 @@ const COMMANDS: [&str; 18] = [
     "timer",
     "raw",
     "monitor",
+    "apps",
+    "listen",
     "away",
     "back",
     "sleep",
@@ -716,6 +742,9 @@ impl Inner {
         if !self.local_monitors.is_empty() {
             state["localMonitors"] = json!(self.local_monitors);
             state["localMonitor"] = json!(self.local_monitor.load(Ordering::SeqCst));
+        }
+        if self.app_capture().is_some() {
+            state["localApp"] = json!(locked(&self.local_app).clone());
         }
         if let (Value::Object(state), Value::Object(plan)) = (&mut state, locked(&self.plan).to_json()) {
             state.extend(plan);
@@ -1203,10 +1232,40 @@ impl Inner {
         Ok(json!({}))
     }
 
+    /// The local sound capture, where it can follow one program alone.
+    fn app_capture(&self) -> Option<&Arc<dyn AudioCapture>> {
+        self.local_audio.as_ref().filter(|capture| capture.follows_apps())
+    }
+
+    /// Have the local capture follow one program's sound, or everything again.
+    async fn choose_app(self: &Arc<Self>, request: &Value) -> Result<Value> {
+        let Some(capture) = self.app_capture() else {
+            return Err(invalid("this machine cannot follow the sound of one program"));
+        };
+        let app = request.get("app").filter(|app| !app.is_null()).map(as_text).filter(|app| !app.trim().is_empty());
+        if std::mem::replace(&mut *locked(&self.local_app), app.clone()) == app {
+            return Ok(json!({}));
+        }
+        capture.follow(app);
+        let running = locked(&self.feeds).audio_local.take();
+        if running.is_some() {
+            capture.stop().await; // an effect following the sound restarts on the other one
+        }
+        self.feed_changed(Needs::Audio).await;
+        Ok(json!({}))
+    }
+
     async fn run(self: &Arc<Self>, command: &str, request: &Value) -> Result<Value> {
         let fade = truthy(request.get("fade"));
         match command {
             "monitor" => self.choose_monitor(request).await,
+            "apps" => {
+                let Some(capture) = self.app_capture() else {
+                    return Err(invalid("this machine cannot follow the sound of one program"));
+                };
+                Ok(json!({"apps": capture.apps().await?, "app": locked(&self.local_app).clone()}))
+            }
+            "listen" => self.choose_app(request).await,
             "away" => {
                 let reason = as_text(field(request, "reason")?);
                 if !AWAY_REASONS.contains(&reason.as_str()) {

@@ -10,6 +10,8 @@ export type Feed = {
   from: string
   /** the monitor being followed, when the machine has more than one; 0 is all of them */
   monitor: number | null
+  /** the one program whose sound is followed, where the machine singles one out */
+  app: string | null
 }
 
 export function monitorName(index: number): string {
@@ -25,6 +27,7 @@ export function feedOf(state: State | null, kind: Kind, own: boolean): Feed {
       agent: true,
       from: agents.map((agent) => agent.name ?? 'another computer').join(', '),
       monitor: kind === 'screen' && only && only.monitors.length > 1 ? only.monitor : null,
+      app: null,
     }
   }
   const monitors = state?.localMonitors ?? []
@@ -33,12 +36,14 @@ export function feedOf(state: State | null, kind: Kind, own: boolean): Feed {
     // the app follows no screen of its own; only an agent brings one
     from: own ? (kind === 'screen' ? 'no computer yet' : 'this device') : 'the service’s computer',
     monitor: kind === 'screen' && monitors.length > 1 ? (state?.localMonitor ?? null) : null,
+    app: kind === 'audio' ? (state?.localApp ?? null) : null,
   }
 }
 
-/** One line for the badge: "Screen: MERT-PC (agent) · monitor 2". */
+/** One line for the badge: "Screen: MERT-PC (agent) · monitor 2", "Sound: the service’s computer · Spotify". */
 export function feedText(kind: Kind, feed: Feed): string {
   const what = kind === 'audio' ? 'Sound' : 'Screen'
   const monitor = feed.monitor === null ? '' : ` · ${monitorName(feed.monitor)}`
-  return `${what}: ${feed.from}${feed.agent ? ' (agent)' : ''}${monitor}`
+  const app = feed.app === null ? '' : ` · ${feed.app}`
+  return `${what}: ${feed.from}${feed.agent ? ' (agent)' : ''}${monitor}${app}`
 }
