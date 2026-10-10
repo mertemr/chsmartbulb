@@ -1,0 +1,5 @@
+rules:
+  cache-poisoning:
+    ignore:
+      # the caches there are switched off for tags, which zizmor cannot see
+      - app.yml
