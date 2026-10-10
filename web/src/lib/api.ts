@@ -21,6 +21,7 @@ export type State = {
   problem: string | null // why the service could not reach the bulb, while it cannot
   playing: boolean
   away?: 'lock' | 'sleep' | 'shutdown' | null // the computer is away: the bulb shows the away look, the plan waits
+  sleep?: { minutes: number; left: number } | null // a sleep timer: set for `minutes`, `left` seconds until the light goes off
   on: boolean
   color: string
   brightness: number
