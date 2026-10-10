@@ -7,12 +7,13 @@
 use std::path::PathBuf;
 
 /// Every name the file may set; the service has no use for the host, the command line has.
-pub const NAMES: [&str; 6] = [
+pub const NAMES: [&str; 7] = [
     "CHSMARTBULB_ADDRESS",
     "CHSMARTBULB_TOKEN",
     "CHSMARTBULB_HOST",
     "CHSMARTBULB_TRANSPORT",
     "CHSMARTBULB_AUDIO_DEVICE",
+    "CHSMARTBULB_AUDIO_APP",
     "CHSMARTBULB_MONITOR",
 ];
 
