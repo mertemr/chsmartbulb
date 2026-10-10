@@ -58,6 +58,9 @@
   {#if needs}
     <SourceNote kind={needs} />
   {/if}
+  {#if info?.also}
+    <SourceNote kind={info.also} />
+  {/if}
 
   <div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-3">
     {#each effects as effect (effect.name)}

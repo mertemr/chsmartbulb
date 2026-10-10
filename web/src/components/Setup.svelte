@@ -142,7 +142,7 @@
     <div>
       <h2 class="font-semibold">Or use a computer’s service</h2>
       <p class="text-muted mt-1 text-sm">
-        When a computer already holds the bulb with <code>chsmartbulb daemon --web 8378</code>, control it through that.
+        When a computer already holds the bulb with <code>chsmartbulbd --web 8378</code>, control it through that.
       </p>
     </div>
     <form class="grid gap-3" onsubmit={remote}>
