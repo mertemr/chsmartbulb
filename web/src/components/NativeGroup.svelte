@@ -42,7 +42,7 @@
         <h3 class="font-medium"><span class="capitalize">{active.replaceAll('_', ' ')}</span> settings</h3>
         <button
           type="button"
-          class="border-line h-9 rounded-lg border px-3 text-sm font-medium disabled:opacity-40"
+          class="border-line h-9 shrink-0 rounded-lg border px-3 text-sm font-medium whitespace-nowrap disabled:opacity-40"
           disabled={speed.value === DEFAULT_SPEED}
           onclick={() => changeSpeed(DEFAULT_SPEED)}
         >
