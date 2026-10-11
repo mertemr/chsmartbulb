@@ -61,10 +61,23 @@ fn event(body: InvokeResponseBody) -> Option<Event> {
     }
 }
 
+/// Ask the Kotlin side, and wait for its answer on a task of its own: Tauri panics in the answer
+/// when nobody waits for it any more, which takes the app down, and callers here do stop waiting
+/// (an effect replaced in the middle of a write, a service closed while it connects).
+async fn ask<R: Runtime, T: DeserializeOwned + Send + 'static>(
+    handle: &PluginHandle<R>,
+    command: &'static str,
+    payload: Value,
+) -> Result<T> {
+    let handle = handle.clone();
+    let asked = tauri::async_runtime::spawn(async move { handle.run_mobile_plugin_async(command, payload).await });
+    Ok(asked.await.map_err(|error| crate::Error::Bluetooth(error.to_string()))??)
+}
+
 impl<R: Runtime> Bluetooth<R> {
     /// Ask for the Bluetooth permissions and to switch Bluetooth on, as needed.
     pub async fn prepare(&self) -> Result<Readiness> {
-        Ok(self.handle.run_mobile_plugin_async("prepare", json!({})).await?)
+        ask(&self.handle, "prepare", json!({})).await
     }
 
     /// Bonded devices and those advertising over BLE nearby.
@@ -73,7 +86,7 @@ impl<R: Runtime> Bluetooth<R> {
         struct Scanned {
             devices: Vec<Found>,
         }
-        let scanned: Scanned = self.handle.run_mobile_plugin_async("scan", json!({ "seconds": seconds })).await?;
+        let scanned: Scanned = ask(&self.handle, "scan", json!({ "seconds": seconds })).await?;
         Ok(scanned.devices)
     }
 
@@ -91,7 +104,7 @@ impl<R: Runtime> Bluetooth<R> {
     }
 
     pub async fn audio_route(&self) -> Result<AudioRoute> {
-        Ok(self.handle.run_mobile_plugin_async("audioRoute", json!({})).await?)
+        ask(&self.handle, "audioRoute", json!({})).await
     }
 
     /// Open a system settings screen: `bluetooth` or `sound`.
@@ -107,8 +120,7 @@ impl<R: Runtime> Bluetooth<R> {
 
     /// Keep the app running with a notification while it drives the bulb, so effects survive the screen going off.
     pub async fn keep_running(&self, running: bool, title: &str) -> Result<()> {
-        let _: Value =
-            self.handle.run_mobile_plugin_async("keepRunning", json!({ "running": running, "title": title })).await?;
+        let _: Value = ask(&self.handle, "keepRunning", json!({ "running": running, "title": title })).await?;
         Ok(())
     }
 }
@@ -126,15 +138,14 @@ struct AndroidWriter<R: Runtime> {
 #[async_trait]
 impl<R: Runtime> Writer for AndroidWriter<R> {
     async fn write(&self, data: &[u8]) -> chsmartbulb_core::Result<()> {
-        self.handle
-            .run_mobile_plugin_async::<Value>("write", json!({ "data": STANDARD.encode(data) }))
+        ask::<R, Value>(&self.handle, "write", json!({ "data": STANDARD.encode(data) }))
             .await
             .map(drop)
             .map_err(|e| chsmartbulb_core::Error::Transport(e.to_string()))
     }
 
     async fn close(&self) {
-        let _ = self.handle.run_mobile_plugin_async::<Value>("disconnect", json!({})).await;
+        let _ = ask::<R, Value>(&self.handle, "disconnect", json!({})).await;
     }
 }
 
@@ -166,7 +177,7 @@ impl<R: Runtime> Connector for AndroidConnector<R> {
             Bearer::Spp => "spp",
         };
         let request = json!({ "address": self.address, "bearer": bearer, "onEvent": channel });
-        match self.handle.run_mobile_plugin_async::<Value>("connect", request).await {
+        match ask::<R, Value>(&self.handle, "connect", request).await {
             Ok(_) => Ok(link as Arc<dyn Link>),
             Err(error) => Err(chsmartbulb_core::Error::ConnectionFailed(error.to_string())),
         }
@@ -218,14 +229,13 @@ impl<R: Runtime> AudioCapture for AndroidAudio<R> {
             AudioInput::Playback => "playback",
             AudioInput::Microphone => "microphone",
         };
-        self.handle
-            .run_mobile_plugin_async::<Value>("startAudio", json!({ "input": input, "onEvent": channel }))
+        ask::<R, Value>(&self.handle, "startAudio", json!({ "input": input, "onEvent": channel }))
             .await
             .map(drop)
             .map_err(|e| chsmartbulb_core::Error::Invalid(format!("cannot listen to the {input}: {e}")))
     }
 
     async fn stop(&self) {
-        let _ = self.handle.run_mobile_plugin_async::<Value>("stopAudio", json!({})).await;
+        let _ = ask::<R, Value>(&self.handle, "stopAudio", json!({})).await;
     }
 }
