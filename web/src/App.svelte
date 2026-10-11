@@ -149,7 +149,7 @@
     {/if}
 
     <main class="mt-4 grid gap-4 lg:grid-cols-2 lg:items-start" inert={app.link !== 'online'}>
-      <div class="grid gap-4">
+      <div class="grid grid-cols-1 gap-4">
         <section class={CARD}>
           <Slider
             label="Brightness"

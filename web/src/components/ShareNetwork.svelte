@@ -71,7 +71,7 @@
       <div class="grid gap-0.5">
         <dt class="text-muted">From a computer (the Python package)</dt>
         <dd>
-          <pre class="bg-card border-line overflow-x-auto rounded-lg border p-2 text-xs">chsmartbulb --host {host}{port} --token {share.token} audio-agent
+          <pre class="bg-card border-line rounded-lg border p-2 text-xs break-all whitespace-pre-wrap">chsmartbulb --host {host}{port} --token {share.token} audio-agent
 chsmartbulb --host {host}{port} --token {share.token} screen-agent</pre>
         </dd>
       </div>
