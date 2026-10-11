@@ -126,7 +126,8 @@ The Linux build needs WebKitGTK 4.1, e.g. on Arch
 `apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev`.
 Sharing a Wayland screen adds the PipeWire headers and libclang (`pipewire clang` on Arch,
 `libpipewire-0.3-dev libclang-dev` on Debian and Ubuntu); `pnpm tauri build -- --no-default-features`
-leaves it out. Build through `pnpm tauri`: a plain `cargo build` of the app loads the page from
+leaves it out, and so do the bundles the workflow builds, whose Ubuntu 22.04 has too old a
+PipeWire: on Wayland those follow a screen through an agent only. Build through `pnpm tauri`: a plain `cargo build` of the app loads the page from
 the development server instead of carrying it.
 
 For Android, with the Android SDK and NDK installed (`ANDROID_HOME`, `NDK_HOME`) and the

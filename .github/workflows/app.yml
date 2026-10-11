@@ -214,8 +214,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev patchelf
-          # sharing a Wayland screen
-          sudo apt-get install -y libpipewire-0.3-dev libclang-dev
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           package_json_file: web/package.json
@@ -231,7 +229,9 @@ jobs:
         run: |
           pnpm --dir web install --frozen-lockfile
           pnpm --dir app install --frozen-lockfile
-          cd app && pnpm tauri build --ci
+          # without sharing a Wayland screen: it needs a newer PipeWire than this Ubuntu has,
+          # and the bundles are built on an old one to run on old systems
+          cd app && pnpm tauri build --ci -- --no-default-features
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: desktop-${{ runner.os }}
