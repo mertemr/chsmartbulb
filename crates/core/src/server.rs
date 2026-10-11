@@ -328,6 +328,10 @@ async fn web(stream: TcpStream, service: Service, assets: Arc<Assets>, token: Op
     respond(reader.get_mut(), 200, &fields, body).await
 }
 
+/// The app's own pages (Tauri on Linux and macOS, on Windows, on Android), which reach a service
+/// on another machine; a website cannot claim these origins.
+const APP_ORIGINS: [&str; 3] = ["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"];
+
 async fn websocket(
     mut reader: BufReader<TcpStream>,
     request: Request,
@@ -343,7 +347,7 @@ async fn websocket(
     if let Some(origin) = headers.get("origin") {
         // a page from elsewhere, open in a browser on this network, must not reach the bulb
         let host = origin.split("://").nth(1).unwrap_or_default();
-        if Some(&host.to_string()) != headers.get("host") {
+        if !APP_ORIGINS.contains(&origin.as_str()) && Some(&host.to_string()) != headers.get("host") {
             return respond(reader.get_mut(), 403, &[], b"").await;
         }
     }

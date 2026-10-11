@@ -139,4 +139,14 @@ async fn the_web_port_serves_the_page_and_the_socket_protocol() {
     let mut answer = String::new();
     foreign.read_to_string(&mut answer).await.unwrap();
     assert!(answer.starts_with("HTTP/1.1 403"), "{answer}");
+
+    // the app's own pages come from an origin of their own
+    for origin in ["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"] {
+        let mut app = TcpStream::connect(web).await.unwrap();
+        let from_app = handshake.replace(&format!("Origin: http://{web}"), &format!("Origin: {origin}"));
+        app.write_all(from_app.as_bytes()).await.unwrap();
+        let mut head = [0u8; 12];
+        app.read_exact(&mut head).await.unwrap();
+        assert_eq!(&head, b"HTTP/1.1 101", "{origin}");
+    }
 }
