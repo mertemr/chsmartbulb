@@ -572,7 +572,7 @@ dependencies = [
 
 [[package]]
 name = "chsmartbulb-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "android_logger",
  "chsmartbulb-core",
@@ -589,7 +589,7 @@ dependencies = [
 
 [[package]]
 name = "chsmartbulb-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -605,7 +605,7 @@ dependencies = [
 
 [[package]]
 name = "chsmartbulb-daemon"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chsmartbulb-core",
  "chsmartbulb-desktop",
@@ -619,7 +619,7 @@ dependencies = [
 
 [[package]]
 name = "chsmartbulb-desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ashpd",
  "async-trait",
@@ -640,7 +640,7 @@ dependencies = [
 
 [[package]]
 name = "chsmartbulb-native"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chsmartbulb-core",
  "pyo3",
@@ -4221,7 +4221,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-chsmartbulb"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",

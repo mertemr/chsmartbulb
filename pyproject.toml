@@ -1,6 +1,6 @@
 [project]
 name = "chsmartbulb"
-version = "0.1.0"
+version = "0.2.0"
 description = "Command line, agents and library for CHSmartBulb / BL08A Bluetooth speaker bulbs"
 readme = "README.md"
 requires-python = ">=3.10"
