@@ -30,6 +30,10 @@
     "shortDescription": "Control the CHSmartBulb / BL08A speaker bulb",
     "longDescription": "Colour, brightness, effects and the bulb's own modes over Bluetooth, without the vendor app.",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "linux": {
+      "deb": { "depends": ["libpipewire-0.3-0"] },
+      "rpm": { "depends": ["pipewire-libs"] }
+    },
     "android": {
       "minSdkVersion": 24
     }

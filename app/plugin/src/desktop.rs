@@ -1,11 +1,12 @@
 //! Linux and Windows, through `chsmartbulb-desktop`: BLE through btleplug, SPP through an RFCOMM socket.
 
 use std::marker::PhantomData;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use btleplug::api::{Central, Peripheral as _, ScanFilter};
-use chsmartbulb_core::service::AudioCapture;
+use chsmartbulb_core::service::{AudioCapture, ScreenCapture};
 use chsmartbulb_core::{Bearer, Connector};
 use serde::de::DeserializeOwned;
 use tauri::plugin::PluginApi;
@@ -68,6 +69,12 @@ impl<R: Runtime> Bluetooth<R> {
     /// What this computer plays (a loopback of the default output) or its default input.
     pub fn audio_capture(&self, input: AudioInput) -> Option<Arc<dyn AudioCapture>> {
         chsmartbulb_desktop::audio_capture(input == AudioInput::Microphone, None)
+    }
+
+    /// What this computer's screens show; a Wayland desktop asks which one and the answer is
+    /// remembered in `shared_screen`.
+    pub fn screen_capture(&self, shared_screen: Option<PathBuf>) -> Option<Arc<dyn ScreenCapture>> {
+        chsmartbulb_desktop::screen_capture(shared_screen)
     }
 
     pub async fn audio_route(&self) -> Result<AudioRoute> {

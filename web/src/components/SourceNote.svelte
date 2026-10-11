@@ -1,6 +1,6 @@
 <script lang="ts">
   import { app } from '../lib/app.svelte'
-  import { feedOf } from '../lib/sources'
+  import { feedOf, seesScreen } from '../lib/sources'
   import AppPicker from './AppPicker.svelte'
   import MonitorPicker from './MonitorPicker.svelte'
 
@@ -30,6 +30,9 @@
       {:else if kind === 'audio'}
         This app does not listen to sound here. Turn on <em>Share on the network</em> under Device and run the Python
         package’s <code>audio-agent</code> on a computer.
+      {:else if seesScreen(app.state)}
+        Following this computer’s screen. For another computer’s, turn on <em>Share on the network</em> under Device
+        and run the Python package’s <code>screen-agent</code> there.
       {:else}
         The screen effect follows a computer’s screen: turn on <em>Share on the network</em> under Device and run the
         Python package’s <code>screen-agent</code> there.

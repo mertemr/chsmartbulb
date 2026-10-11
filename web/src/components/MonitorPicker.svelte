@@ -5,6 +5,9 @@
   // service's own computer while no agent does. Nothing shows for a machine with one monitor.
   type Target = { id: string; name: string; monitors: { index: number; width: number; height: number }[]; monitor: number | null }
 
+  // in the app the service's computer is the one in front of the user
+  const here = $derived(app.mode === 'native')
+
   const targets = $derived.by((): Target[] => {
     const state = app.state
     if (!state) return []
@@ -15,7 +18,7 @@
     }
     const monitors = state.localMonitors ?? []
     return monitors.length > 1
-      ? [{ id: 'local', name: 'the service’s computer', monitors, monitor: state.localMonitor ?? null }]
+      ? [{ id: 'local', name: here ? 'this computer' : 'the service’s computer', monitors, monitor: state.localMonitor ?? null }]
       : []
   })
 
@@ -31,7 +34,8 @@
 {#if asks}
   <div class="grid gap-2">
     <p class="text-muted text-xs">
-      The service’s computer shares the screen chosen on it. Choosing another opens its desktop’s question there.
+      {here ? 'This computer' : 'The service’s computer'} shares the screen chosen on it. Choosing another opens its
+      desktop’s question {here ? 'again' : 'there'}.
     </p>
     <div>
       <button

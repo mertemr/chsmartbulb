@@ -160,6 +160,10 @@ async fn start(app: &AppHandle, device: &Device, settings: &Settings) -> Result<
     if let Some(capture) = bluetooth.audio_capture(input) {
         builder = builder.audio_capture(capture);
     }
+    let shared_screen = app.path().app_data_dir().ok().map(|dir| dir.join("shared-screen"));
+    if let Some(capture) = bluetooth.screen_capture(shared_screen) {
+        builder = builder.screen_capture(capture);
+    }
     let service = builder.build();
     service.start();
     let mut subscription = service.subscribe();

@@ -13,6 +13,11 @@ rust-version = "1.90"
 name = "chsmartbulb_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+default = ["portal"]
+# follow the screen of a Wayland session; building it needs the PipeWire headers and libclang
+portal = ["tauri-plugin-chsmartbulb/portal"]
+
 [dependencies]
 chsmartbulb-core = { workspace = true, features = ["server"] }
 getrandom = "0.3"

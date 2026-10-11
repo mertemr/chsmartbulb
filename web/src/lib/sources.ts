@@ -18,6 +18,11 @@ export function monitorName(index: number): string {
   return index === 0 ? 'all monitors' : `monitor ${index}`
 }
 
+/** Whether the service's own machine has a screen it can follow. */
+export function seesScreen(state: State | null): boolean {
+  return (state?.localMonitors?.length ?? 0) > 0 || Boolean(state?.localScreenAsks)
+}
+
 /** `own`: the service is this app's own, so "the machine it runs on" is this device. */
 export function feedOf(state: State | null, kind: Kind, own: boolean): Feed {
   const agents = state?.agentInfo?.[kind] ?? []
@@ -31,10 +36,11 @@ export function feedOf(state: State | null, kind: Kind, own: boolean): Feed {
     }
   }
   const monitors = state?.localMonitors ?? []
+  // a phone follows no screen of its own; only an agent brings one
+  const here = kind === 'audio' || seesScreen(state)
   return {
     agent: false,
-    // the app follows no screen of its own; only an agent brings one
-    from: own ? (kind === 'screen' ? 'no computer yet' : 'this device') : 'the service’s computer',
+    from: own ? (here ? 'this device' : 'no computer yet') : 'the service’s computer',
     monitor: kind === 'screen' && monitors.length > 1 ? (state?.localMonitor ?? null) : null,
     app: kind === 'audio' ? (state?.localApp ?? null) : null,
   }

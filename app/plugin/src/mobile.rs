@@ -1,12 +1,13 @@
 //! Android: the Kotlin side of the plugin holds the Bluetooth links and the audio capture.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use chsmartbulb_core::audio::{Analyzer, AudioSource};
-use chsmartbulb_core::service::AudioCapture;
+use chsmartbulb_core::service::{AudioCapture, ScreenCapture};
 use chsmartbulb_core::transport::{ChannelLink, LinkFeed, Writer};
 use chsmartbulb_core::{Bearer, Connector, Link};
 use serde::de::DeserializeOwned;
@@ -82,6 +83,11 @@ impl<R: Runtime> Bluetooth<R> {
 
     pub fn audio_capture(&self, input: AudioInput) -> Option<Arc<dyn AudioCapture>> {
         Some(Arc::new(AndroidAudio { handle: self.handle.clone(), input }))
+    }
+
+    /// A phone's screen is not followed; a computer's comes in through an agent.
+    pub fn screen_capture(&self, _shared_screen: Option<PathBuf>) -> Option<Arc<dyn ScreenCapture>> {
+        None
     }
 
     pub async fn audio_route(&self) -> Result<AudioRoute> {

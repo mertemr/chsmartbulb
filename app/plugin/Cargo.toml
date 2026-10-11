@@ -9,6 +9,10 @@ repository.workspace = true
 rust-version = "1.90"
 links = "tauri-plugin-chsmartbulb"
 
+[features]
+# follow the screen of a Wayland session; building it needs the PipeWire headers and libclang
+portal = ["chsmartbulb-desktop/portal"]
+
 [dependencies]
 async-trait.workspace = true
 base64 = "0.22"

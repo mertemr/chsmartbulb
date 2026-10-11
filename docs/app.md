@@ -53,8 +53,12 @@ settings.
 
 The desktop app listens to what the computer plays, or to its microphone: on Linux through
 `parec` from the default output's monitor (PipeWire and PulseAudio both offer it), on Windows as
-a WASAPI loopback of the default output. The screen effect follows a computer's screen through
-the Python package's `screen-agent`, with sharing turned on (see below).
+a WASAPI loopback of the default output, and on Linux it can follow one program alone.
+
+It also follows the computer's own screen, as `chsmartbulbd` does: the desktop on Windows and
+X11, and in a Wayland session the screen the desktop is asked to share (see
+[usage.md](usage.md#background-service)). Another computer's screen, and any screen for the app on a
+phone, comes in through the Python package's `screen-agent`, with sharing turned on (see below).
 
 ## Sharing on the network
 
@@ -120,6 +124,10 @@ pnpm tauri build          # desktop bundles in target/release/bundle
 The Linux build needs WebKitGTK 4.1, e.g. on Arch
 `pacman -S webkit2gtk-4.1 libayatana-appindicator librsvg base-devel`, on Debian and Ubuntu
 `apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev`.
+Sharing a Wayland screen adds the PipeWire headers and libclang (`pipewire clang` on Arch,
+`libpipewire-0.3-dev libclang-dev` on Debian and Ubuntu); `pnpm tauri build -- --no-default-features`
+leaves it out. Build through `pnpm tauri`: a plain `cargo build` of the app loads the page from
+the development server instead of carrying it.
 
 For Android, with the Android SDK and NDK installed (`ANDROID_HOME`, `NDK_HOME`) and the
 Rust targets added (`rustup target add aarch64-linux-android armv7-linux-androideabi
