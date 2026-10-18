@@ -4,7 +4,10 @@
   import { app } from '../lib/app.svelte'
   import { native, SIMULATED, type Bearer, type Found } from '../lib/native'
 
-  let bearer = $state<Bearer>(app.setup?.device?.bearer ?? 'ble')
+  // A computer has the bulb as its speaker, and BlueZ gives a bulb paired that way no LE link
+  // (docs/device.md), so the desktop starts on Classic, as chsmartbulbd does.
+  const desktop = app.setup?.platform === 'linux' || app.setup?.platform === 'windows'
+  let bearer = $state<Bearer>(app.setup?.device?.bearer ?? (desktop ? 'spp' : 'ble'))
   let found = $state<Found[]>([])
   let searching = $state(false)
   let problem = $state('')
