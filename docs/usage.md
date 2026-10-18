@@ -281,8 +281,11 @@ sets the sleep timer (up to 480 minutes; `0` calls it off), and the state then c
 `effects` lists each effect with what it follows (`needs`, and `also` for one that follows both
 the sound and the screen), its default `params` and a `schema` per parameter
 (`{"type": "number", "min", "max", "step"}`, `{"type": "color", "optional"}`,
-`{"type": "colors"}` or `{"type": "steps", "most", "easings"}`), plus the names and speed range of the bulb's `native` effects. A front end
-can build its controls from that reply alone.
+`{"type": "colors"}`, `{"type": "choice", "options"}` or
+`{"type": "steps", "most", "easings"}`), plus the names and speed range of the bulb's
+`native` effects. A schema may also carry `"when": {"other": ["value", ...]}`: the parameter
+applies only while `other` holds one of those values, so a front end can leave it out until it
+does. A front end can build its controls from that reply alone.
 
 A network connection must start with `{"cmd": "auth", "token": "..."}`, unless the service runs
 with `--no-token`. An agent then sends
