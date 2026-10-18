@@ -356,42 +356,33 @@ impl Analyzer {
     }
 }
 
+/// How a beat shows: the flash falls at `decay` per second and the light never drops
+/// below `floor` of its brightness.
+///
+/// Without a colour the hue turns `step` degrees on every beat, at `saturation`.
+#[derive(Debug, Clone, Copy)]
+pub struct Beat {
+    /// Degrees the hue turns on each beat, when the colour is not given.
+    pub step: f64,
+    /// How fast the flash falls, per second.
+    pub decay: f64,
+    /// The brightness (0..1) kept between beats.
+    pub floor: f64,
+    /// How colourful the stepped hue is (0..1), when the colour is not given.
+    pub saturation: f64,
+}
+
 /// Flash on every beat and glow with the bass in between.
 ///
 /// Without a `color` the hue steps to a new one on each beat.
-pub fn music_pulse(
+pub fn music_beat(
     source: Arc<AudioSource>,
     color: Option<Color>,
-    decay: f64,
+    beat: Beat,
     delay: f64,
     sensitivity: f64,
 ) -> Result<Effect> {
-    source.set_delay(delay)?;
-    source.set_sensitivity(sensitivity)?;
-    Ok(Box::new(move |_t| {
-        let heard = source.heard();
-        let flash = (-decay * (heard.now - heard.last_beat)).exp();
-        let level = flash.max(0.6 * heard.levels.bass).min(1.0);
-        if level < DARK {
-            return OFF; // scaled() never rounds a lit channel to zero, silence should be dark
-        }
-        let base = color.unwrap_or_else(|| Color::from_hsv(heard.beats as f64 * 47.0, 1.0, 1.0));
-        base.scaled(level)
-    }))
-}
-
-/// Turn the colour by `step` degrees on every beat; flash and glow with the bass.
-///
-/// Between beats the light falls to `floor` of its brightness, never fully dark.
-pub fn music_beathue(
-    source: Arc<AudioSource>,
-    step: f64,
-    decay: f64,
-    floor: f64,
-    saturation: f64,
-    delay: f64,
-    sensitivity: f64,
-) -> Result<Effect> {
+    let Beat { step, decay, floor, saturation } = beat;
     if !(1.0..=180.0).contains(&step) {
         return Err(invalid("step must be within 1..180 degrees"));
     }
@@ -409,11 +400,14 @@ pub fn music_beathue(
     Ok(Box::new(move |_t| {
         let heard = source.heard();
         let flash = (-decay * (heard.now - heard.last_beat)).exp();
-        let level = floor + (1.0 - floor) * flash.max(0.6 * heard.levels.bass);
+        let level = (floor + (1.0 - floor) * flash.max(0.6 * heard.levels.bass)).min(1.0);
         if level < DARK {
-            return OFF;
+            return OFF; // scaled() never rounds a lit channel to zero, silence should be dark
         }
-        Color::from_hsv(heard.beats as f64 * step, saturation, 1.0).scaled(level)
+        match color {
+            Some(color) => color.scaled(level),
+            None => Color::from_hsv(heard.beats as f64 * step, saturation, 1.0).scaled(level),
+        }
     }))
 }
 
@@ -907,10 +901,11 @@ mod tests {
     }
 
     #[test]
-    fn pulse_flashes_and_goes_dark() {
+    fn beat_flashes_in_one_colour_and_goes_dark() {
         let (clock, now) = manual_clock();
         let source = AudioSource::new(clock);
-        let mut effect = music_pulse(source.clone(), Some(RED), 5.0, 0.0, 0.5).unwrap();
+        let beat = Beat { step: 47.0, decay: 5.0, floor: 0.0, saturation: 1.0 };
+        let mut effect = music_beat(source.clone(), Some(RED), beat, 0.0, 0.5).unwrap();
         assert_eq!(effect(0.0), OFF);
         source.publish(Levels::default(), 10.0);
         assert_eq!(effect(0.0), RED);
@@ -919,10 +914,11 @@ mod tests {
     }
 
     #[test]
-    fn beathue_steps_the_hue_and_keeps_a_floor() {
+    fn beat_steps_the_hue_and_keeps_a_floor() {
         let (clock, now) = manual_clock();
         let source = AudioSource::new(clock);
-        let mut effect = music_beathue(source.clone(), 120.0, 5.0, 0.2, 1.0, 0.0, 0.5).unwrap();
+        let beat = Beat { step: 120.0, decay: 5.0, floor: 0.2, saturation: 1.0 };
+        let mut effect = music_beat(source.clone(), None, beat, 0.0, 0.5).unwrap();
         assert_eq!(effect(0.0), Color::rgb(51, 0, 0)); // never beat and silent: the floor, in red
         set(&now, 10.0);
         source.publish(Levels::default(), 10.0); // a beat, the bass silent
@@ -934,7 +930,7 @@ mod tests {
     }
 
     #[test]
-    fn beathue_refuses_what_does_not_fit() {
+    fn beat_refuses_what_does_not_fit() {
         let (clock, _) = manual_clock();
         let source = AudioSource::new(clock);
         for (step, decay, floor, saturation, delay, sensitivity) in [
@@ -946,7 +942,8 @@ mod tests {
             (47.0, 5.0, 0.1, 1.0, 5.0, 0.5),
             (47.0, 5.0, 0.1, 1.0, 0.0, 2.0),
         ] {
-            assert!(music_beathue(source.clone(), step, decay, floor, saturation, delay, sensitivity).is_err());
+            let beat = Beat { step, decay, floor, saturation };
+            assert!(music_beat(source.clone(), None, beat, delay, sensitivity).is_err());
         }
     }
 

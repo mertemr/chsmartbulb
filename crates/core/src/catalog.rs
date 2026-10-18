@@ -293,19 +293,28 @@ pub static CATALOG: &[EffectInfo] = &[
     },
     EffectInfo {
         name: "music",
-        summary: "flash on the beat of the computer's audio",
+        summary: "flash on the beat, a new colour on each one unless you pick one",
         needs: Some(Needs::Audio),
         also: None,
         defaults: || {
             vec![
                 ("color", Param::Color(None)),
                 ("decay", Param::Number(5.0)),
+                ("floor", Param::Number(0.0)),
+                ("step", Param::Number(47.0)),
+                ("saturation", Param::Number(1.0)),
                 ("delay", Param::Number(0.0)),
                 ("sensitivity", Param::Number(DEFAULT_SENSITIVITY)),
             ]
         },
         build: |p, s| {
-            audio::music_pulse(audio(s, "music")?, c(p, "color"), n(p, "decay"), n(p, "delay"), n(p, "sensitivity"))
+            let beat = audio::Beat {
+                step: n(p, "step"),
+                decay: n(p, "decay"),
+                floor: n(p, "floor"),
+                saturation: n(p, "saturation"),
+            };
+            audio::music_beat(audio(s, "music")?, c(p, "color"), beat, n(p, "delay"), n(p, "sensitivity"))
         },
         ranges: &[],
     },
@@ -359,34 +368,6 @@ pub static CATALOG: &[EffectInfo] = &[
                 n(p, "width"),
                 n(p, "release"),
                 n(p, "delay"),
-            )
-        },
-        ranges: &[],
-    },
-    EffectInfo {
-        name: "beathue",
-        summary: "the colour turns on every beat, the brightness follows the bass",
-        needs: Some(Needs::Audio),
-        also: None,
-        defaults: || {
-            vec![
-                ("step", Param::Number(47.0)),
-                ("decay", Param::Number(5.0)),
-                ("floor", Param::Number(0.1)),
-                ("saturation", Param::Number(1.0)),
-                ("delay", Param::Number(0.0)),
-                ("sensitivity", Param::Number(DEFAULT_SENSITIVITY)),
-            ]
-        },
-        build: |p, s| {
-            audio::music_beathue(
-                audio(s, "beathue")?,
-                n(p, "step"),
-                n(p, "decay"),
-                n(p, "floor"),
-                n(p, "saturation"),
-                n(p, "delay"),
-                n(p, "sensitivity"),
             )
         },
         ranges: &[],
@@ -665,7 +646,14 @@ pub static CATALOG: &[EffectInfo] = &[
     },
 ];
 
+/// Names that were their own effect once and are now a setting of another.
+///
+/// They still run, so a saved effect and an old script keep working, but [`describe`]
+/// lists only what they became.
+static ALIASES: &[(&str, &str)] = &[("beathue", "music")];
+
 pub fn lookup(name: &str) -> Option<&'static EffectInfo> {
+    let name = ALIASES.iter().find(|(old, _)| *old == name).map_or(name, |(_, now)| now);
     CATALOG.iter().find(|info| info.name == name)
 }
 
@@ -825,6 +813,16 @@ mod tests {
     }
 
     #[test]
+    fn an_old_name_still_runs_what_it_became() {
+        assert_eq!(lookup("beathue").unwrap().name, "music");
+        let resolved = resolve("beathue", Some(&params(json!({"step": 90})))).unwrap();
+        assert_eq!(resolved["step"], Param::Number(90.0));
+        assert_eq!(resolved["color"], Param::Color(None));
+        let sources = Sources { audio: Some(AudioSource::new(audio::monotonic())), screen: None };
+        assert!(create("beathue", None, &sources).is_ok());
+    }
+
+    #[test]
     fn numbers_must_be_finite() {
         for bad in ["inf", "nan", "-inf"] {
             assert!(resolve("beathue", Some(&params(json!({"decay": bad})))).is_err());
@@ -859,7 +857,7 @@ mod tests {
     fn describe_is_plain_data_covering_every_effect() {
         let described = describe();
         let all = described.as_array().unwrap();
-        assert_eq!(all.len(), 28);
+        assert_eq!(all.len(), 27);
         let names: Vec<&str> = all.iter().map(|e| e["name"].as_str().unwrap()).collect();
         assert_eq!(
             names,
@@ -880,7 +878,6 @@ mod tests {
                 "spectrum",
                 "volume",
                 "stereo",
-                "beathue",
                 "tempo",
                 "centroid",
                 "drop",
@@ -912,9 +909,9 @@ mod tests {
         assert_eq!(music["params"]["color"], Value::Null);
         assert_eq!(music["schema"]["color"], json!({"type": "color", "optional": true}));
         assert_eq!(music["schema"]["delay"], json!({"type": "number", "min": 0.0, "max": 2.0, "step": 0.01}));
-        let beathue = all.iter().find(|e| e["name"] == "beathue").unwrap();
-        assert_eq!(beathue["needs"], "audio");
-        assert_eq!(beathue["schema"]["step"], json!({"type": "number", "min": 1.0, "max": 180.0, "step": 1.0}));
+        assert_eq!(music["schema"]["step"], json!({"type": "number", "min": 1.0, "max": 180.0, "step": 1.0}));
+        assert_eq!(music["params"]["floor"], 0.0); // dark between beats, as it always was
+        assert!(!all.iter().any(|e| e["name"] == "beathue")); // it became a setting of music
         let screen = all.iter().find(|e| e["name"] == "screen").unwrap();
         assert_eq!(screen["schema"]["saturation"]["max"], 3.0);
         assert_eq!(screen["also"], Value::Null);

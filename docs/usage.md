@@ -309,11 +309,10 @@ A screen agent sends `{"cmd": "screen", "color": "#rrggbb"}` whenever the colour
 | `lightning` | A dim sky, and strikes that flicker and die away | `color`, `sky`, `glow`, `power`, `gap` |
 | `sunrise` | From dark through red and orange to a warm light, then it stays | `color`, `minutes` |
 | `custom` | Your own colours, timings and fades | `steps`, `speed` |
-| `music` | Flash on the beat | `color`, `decay`, `sensitivity`, `delay` |
+| `music` | Flash on the beat, a new colour on each one unless you pick one | `color`, `decay`, `floor`, `step`, `saturation`, `delay`, `sensitivity` |
 | `spectrum` | Bass, mids and treble as red, green and blue | `release`, `delay` |
 | `volume` | One colour, as bright as the sound is loud | `color`, `release`, `floor`, `delay` |
 | `stereo` | Blend two colours by where the sound sits | `left`, `right`, `width`, `release`, `delay` |
-| `beathue` | Turn the colour on every beat, glow with the bass | `step`, `decay`, `floor`, `saturation`, `delay`, `sensitivity` |
 | `tempo` | Warm for slow music, cool for fast, by the gaps between beats | `slow`, `fast`, `smoothing`, `delay`, `sensitivity` |
 | `centroid` | Blend two colours by whether the sound is bass-heavy or bright | `low`, `high`, `width`, `release`, `delay` |
 | `drop` | Open up as the music builds, flash when it comes back in | `color`, `flash`, `build`, `delay`, `sensitivity` |
@@ -359,18 +358,23 @@ chsmartbulb effect sunrise -s minutes=30
 
 ### Sound-reactive effects
 
-`music`, `spectrum`, `volume`, `stereo`, `beathue`, `tempo`, `centroid`, `drop`, `ambient`, `bands`,
-`energy` and `chill` analyse the audio on the computer, taken from the monitor of the default output. It does not matter
+`music`, `spectrum`, `volume`, `stereo`, `tempo`, `centroid`, `drop`, `ambient`, `bands`, `energy`
+and `chill` analyse the audio on the computer, taken from the monitor of the default output. It does not matter
 where the sound plays: laptop speakers, headphones, another Bluetooth device or the bulb itself.
 On Linux the capture needs the `parec` tool that comes with PulseAudio and PipeWire.
 
-`music` changes hue on every beat unless it is given a colour. `sensitivity` (0 to 1, default 0.5)
-sets how easily a rise in the bass counts as a beat: lower it when the light flashes on more than
-the beat, raise it for quiet or bass-light music.
+`music` changes hue on every beat unless it is given a colour, turning it by `step` degrees each
+time at `saturation`; `floor` keeps that much of the brightness between beats, where it otherwise
+goes dark. `sensitivity` (0 to 1, default 0.5) sets how easily a rise in the bass counts as a beat:
+lower it when the light flashes on more than the beat, raise it for quiet or bass-light music.
 
 ```bash
 chsmartbulb effect music -c ff0080 -s sensitivity=0.3
+chsmartbulb effect music -s step=120 -s floor=0.1
 ```
+
+The never-dark version used to be an effect of its own called `beathue`. The name still runs
+`music` and is no longer listed; the only difference is that `floor` now starts at 0.
 
 `volume` ignores beats and follows the loudness in a single colour; `floor` keeps some light in
 the quiet parts.
@@ -382,9 +386,6 @@ if the colour barely moves, lower it if it only ever shows the two ends.
 ```bash
 chsmartbulb effect stereo -s left=00ffff -s right=ff00ff -s width=6
 ```
-
-`beathue` turns the colour by `step` degrees on every beat and never falls below `floor` of its
-brightness, where `music` goes dark between beats.
 
 `tempo` estimates the speed of the music from the gaps between beats and shows `slow` bpm as a warm
 colour and `fast` bpm as a cool one. It is only as good as the beat detection: music without a clear

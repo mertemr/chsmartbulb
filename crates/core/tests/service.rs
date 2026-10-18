@@ -440,6 +440,17 @@ async fn reconnect_request_retries_at_once() {
 }
 
 #[tokio::test]
+async fn an_old_effect_name_runs_under_the_one_it_became() {
+    let fake = FakeBulb::new();
+    let service = attached(&fake, options()).await;
+    assert_eq!(ask(&service, json!({"cmd": "effect", "name": "beathue"})).await["ok"], true);
+    // the clients only know the names the catalog lists, so the state shows that one
+    assert_eq!(service.state()["effect"]["name"], "music");
+    ask(&service, json!({"cmd": "stop"})).await;
+    service.close().await;
+}
+
+#[tokio::test]
 async fn effects_reply_describes_every_parameter_and_the_native_effects() {
     let fake = FakeBulb::new();
     let service = attached(&fake, options()).await;
@@ -447,7 +458,7 @@ async fn effects_reply_describes_every_parameter_and_the_native_effects() {
     let names: Vec<&str> = reply["native"]["names"].as_array().unwrap().iter().map(|n| n.as_str().unwrap()).collect();
     assert!(names.contains(&"breathing") && !names.contains(&"fixed"));
     assert_eq!(reply["native"]["speed"], json!([0, 15]));
-    assert_eq!(reply["effects"].as_array().unwrap().len(), 28);
+    assert_eq!(reply["effects"].as_array().unwrap().len(), 27);
     service.close().await;
 }
 
