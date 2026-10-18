@@ -1349,8 +1349,9 @@ impl Inner {
                     Some(other) => return Err(invalid(format!("params must be an object, got {other}"))),
                 };
                 check_effect(&name, Some(&params))?;
-                // an old name goes on under the one it became, so clients see an effect they know
-                let name = catalog::lookup(&name).map_or(name, |info| info.name.to_string());
+                // an old name goes on under the one it became, carrying what it stood for,
+                // so clients see an effect they know and what is saved keeps its meaning
+                let (name, params) = catalog::canonical(&name, &params);
                 self.take_brightness(request.get("brightness"))?;
                 let duration = match request.get("duration") {
                     None | Some(Value::Null) => None,

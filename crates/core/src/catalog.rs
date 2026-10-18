@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Map, Value};
 
-use crate::audio::{self, AudioSource, DEFAULT_SENSITIVITY, MAX_DELAY};
+use crate::audio::{self, AudioSource, Follow, DEFAULT_SENSITIVITY, FOLLOWS, MAX_DELAY, PAN_SMOOTHING};
 use crate::color::{parse_color, Color, BLUE, GREEN, RED, WHITE};
 use crate::effects::{self, Effect, EASINGS, MAX_STEPS, MORNING, WARM};
 use crate::error::{invalid, Result};
@@ -36,6 +36,17 @@ pub enum Param {
     Color(Option<Color>),
     Colors(Vec<Color>),
     Steps(Vec<Value>),
+    /// One of a fixed set of names.
+    Choice {
+        options: &'static [&'static str],
+        value: String,
+    },
+}
+
+impl Param {
+    fn choice(options: &'static [&'static str], value: &str) -> Param {
+        Param::Choice { options, value: value.to_string() }
+    }
 }
 
 impl Param {
@@ -46,6 +57,7 @@ impl Param {
             Param::Color(None) => Value::Null,
             Param::Colors(colors) => Value::Array(colors.iter().map(|c| json!(c.to_hex())).collect()),
             Param::Steps(steps) => Value::Array(steps.clone()),
+            Param::Choice { value, .. } => json!(value),
         }
     }
 }
@@ -127,6 +139,13 @@ fn audio(sources: &Sources, name: &str) -> Result<Arc<AudioSource>> {
 
 fn screen(sources: &Sources, name: &str) -> Result<Arc<ScreenSource>> {
     sources.screen.clone().ok_or_else(|| invalid(format!("effect {name:?} was given no screen source to follow")))
+}
+
+fn choice<'a>(params: &'a Resolved, key: &str) -> &'a str {
+    match params.get(key) {
+        Some(Param::Choice { value, .. }) => value,
+        _ => unreachable!("{key} is a choice parameter"),
+    }
 }
 
 fn colours<'a>(params: &'a Resolved, key: &str) -> &'a [Color] {
@@ -346,83 +365,41 @@ pub static CATALOG: &[EffectInfo] = &[
         ranges: &[],
     },
     EffectInfo {
-        name: "stereo",
-        summary: "blend two colours by where the sound sits between left and right",
+        name: "blend",
+        summary: "two colours, blended by where the sound sits, how bright it is or how fast it runs",
         needs: Some(Needs::Audio),
         also: None,
         defaults: || {
             vec![
-                ("left", Param::Color(Some(audio::STEREO_LEFT))),
-                ("right", Param::Color(Some(audio::STEREO_RIGHT))),
+                ("follow", Param::choice(&FOLLOWS, "balance")),
+                ("low", Param::Color(Some(audio::STEREO_LEFT))),
+                ("high", Param::Color(Some(audio::STEREO_RIGHT))),
                 ("width", Param::Number(4.0)),
-                ("release", Param::Number(3.0)),
-                ("delay", Param::Number(0.0)),
-            ]
-        },
-        build: |p, s| {
-            let source = audio(s, "stereo")?;
-            audio::music_stereo(
-                source,
-                colour(p, "left"),
-                colour(p, "right"),
-                n(p, "width"),
-                n(p, "release"),
-                n(p, "delay"),
-            )
-        },
-        ranges: &[],
-    },
-    EffectInfo {
-        name: "tempo",
-        summary: "warm for slow music, cool for fast, by the gaps between beats",
-        needs: Some(Needs::Audio),
-        also: None,
-        defaults: || {
-            vec![
                 ("slow", Param::Number(80.0)),
                 ("fast", Param::Number(160.0)),
-                ("smoothing", Param::Number(2.0)),
+                ("smoothing", Param::Number(PAN_SMOOTHING)),
+                ("release", Param::Number(3.0)),
                 ("delay", Param::Number(0.0)),
                 ("sensitivity", Param::Number(DEFAULT_SENSITIVITY)),
             ]
         },
         build: |p, s| {
-            audio::music_tempo(
-                audio(s, "tempo")?,
-                n(p, "slow"),
-                n(p, "fast"),
-                n(p, "smoothing"),
-                n(p, "delay"),
-                n(p, "sensitivity"),
-            )
+            let name = choice(p, "follow");
+            let follow = Follow::from_name(name)
+                .ok_or_else(|| invalid(format!("unknown follow {name:?}; choose from: {}", FOLLOWS.join(", "))))?;
+            let blend = audio::Blend {
+                follow,
+                low: colour(p, "low"),
+                high: colour(p, "high"),
+                width: n(p, "width"),
+                slow: n(p, "slow"),
+                fast: n(p, "fast"),
+                smoothing: n(p, "smoothing"),
+                release: n(p, "release"),
+            };
+            audio::music_blend(audio(s, "blend")?, blend, n(p, "delay"), n(p, "sensitivity"))
         },
-        ranges: &[],
-    },
-    EffectInfo {
-        name: "centroid",
-        summary: "blend two colours by whether the sound is bass-heavy or bright",
-        needs: Some(Needs::Audio),
-        also: None,
-        defaults: || {
-            vec![
-                ("low", Param::Color(Some(RED))),
-                ("high", Param::Color(Some(BLUE))),
-                ("width", Param::Number(2.0)),
-                ("release", Param::Number(3.0)),
-                ("delay", Param::Number(0.0)),
-            ]
-        },
-        build: |p, s| {
-            audio::music_centroid(
-                audio(s, "centroid")?,
-                colour(p, "low"),
-                colour(p, "high"),
-                n(p, "width"),
-                n(p, "release"),
-                n(p, "delay"),
-            )
-        },
-        ranges: &[],
+        ranges: &[("smoothing", (0.0, 5.0, 0.05))],
     },
     EffectInfo {
         name: "drop",
@@ -646,15 +623,74 @@ pub static CATALOG: &[EffectInfo] = &[
     },
 ];
 
-/// Names that were their own effect once and are now a setting of another.
+/// A name that was its own effect once and is now a setting of another.
 ///
-/// They still run, so a saved effect and an old script keep working, but [`describe`]
-/// lists only what they became.
-static ALIASES: &[(&str, &str)] = &[("beathue", "music")];
+/// It still runs, so a saved effect and an old script keep working, but [`describe`]
+/// lists only what it became.
+struct Alias {
+    old: &'static str,
+    now: &'static str,
+    /// What the old name stands for, under anything the caller gives.
+    preset: fn() -> Vec<(&'static str, Param)>,
+}
+
+static ALIASES: &[Alias] = &[
+    Alias { old: "beathue", now: "music", preset: || vec![("floor", Param::Number(0.1))] },
+    Alias {
+        old: "stereo",
+        now: "blend",
+        preset: || {
+            vec![
+                ("follow", Param::choice(&FOLLOWS, "balance")),
+                ("low", Param::Color(Some(audio::STEREO_LEFT))),
+                ("high", Param::Color(Some(audio::STEREO_RIGHT))),
+                ("width", Param::Number(4.0)),
+            ]
+        },
+    },
+    Alias {
+        old: "centroid",
+        now: "blend",
+        preset: || {
+            vec![
+                ("follow", Param::choice(&FOLLOWS, "brightness")),
+                ("low", Param::Color(Some(RED))),
+                ("high", Param::Color(Some(BLUE))),
+                ("width", Param::Number(2.0)),
+            ]
+        },
+    },
+    Alias {
+        old: "tempo",
+        now: "blend",
+        preset: || {
+            vec![
+                ("follow", Param::choice(&FOLLOWS, "tempo")),
+                ("low", Param::Color(Some(audio::TEMPO_SLOW))),
+                ("high", Param::Color(Some(audio::TEMPO_FAST))),
+                ("smoothing", Param::Number(2.0)),
+            ]
+        },
+    },
+];
 
 pub fn lookup(name: &str) -> Option<&'static EffectInfo> {
-    let name = ALIASES.iter().find(|(old, _)| *old == name).map_or(name, |(_, now)| now);
+    let name = ALIASES.iter().find(|alias| alias.old == name).map_or(name, |alias| alias.now);
     CATALOG.iter().find(|info| info.name == name)
+}
+
+/// The catalog name for `name` and the parameters it carries, under those given.
+///
+/// A service stores these, so what it saved goes on meaning the same once the old
+/// name is only an alias.
+pub fn canonical(name: &str, params: &Map<String, Value>) -> (String, Map<String, Value>) {
+    let Some(alias) = ALIASES.iter().find(|alias| alias.old == name) else {
+        return (name.to_string(), params.clone());
+    };
+    let mut merged: Map<String, Value> =
+        (alias.preset)().iter().map(|(key, value)| (key.to_string(), value.to_json())).collect();
+    merged.extend(params.iter().map(|(key, value)| (key.clone(), value.clone())));
+    (alias.now.to_string(), merged)
 }
 
 fn names() -> String {
@@ -703,6 +739,15 @@ fn coerce(key: &str, default: &Param, value: &Value) -> Result<Param> {
                 _ => Err(invalid("steps must be a list of steps, as JSON when given as text")),
             }
         }
+        Param::Choice { options, .. } => {
+            let Value::String(text) = value else {
+                return Err(invalid(format!("{key} must be one of: {}", options.join(", "))));
+            };
+            if !options.contains(&text.as_str()) {
+                return Err(invalid(format!("unknown {key} {text:?}; choose from: {}", options.join(", "))));
+            }
+            Ok(Param::choice(options, text))
+        }
         Param::Number(_) => {
             let number = match value {
                 Value::Number(number) => number.as_f64(),
@@ -725,6 +770,9 @@ pub fn resolve(name: &str, params: Option<&Map<String, Value>>) -> Result<Resolv
     let info = lookup(name).ok_or_else(|| invalid(format!("unknown effect {name:?}; available: {}", names())))?;
     let defaults = (info.defaults)();
     let mut resolved: Resolved = defaults.iter().map(|(key, value)| (key.to_string(), value.clone())).collect();
+    if let Some(alias) = ALIASES.iter().find(|alias| alias.old == name) {
+        resolved.extend((alias.preset)().into_iter().map(|(key, value)| (key.to_string(), value)));
+    }
     for (key, value) in params.into_iter().flatten() {
         let Some((_, default)) = defaults.iter().find(|(known, _)| known == key) else {
             let takes = defaults.iter().map(|(key, _)| *key).collect::<Vec<_>>().join(", ");
@@ -742,11 +790,21 @@ pub fn create(name: &str, params: Option<&Map<String, Value>>, sources: &Sources
     (info.build)(&resolved, sources)
 }
 
+/// Parameters a front end can leave out of its controls: they only apply for some values
+/// of a choice. The effect, the parameter, the choice that decides, and the values it applies for.
+static ONLY_WHEN: &[(&str, &str, &str, &[&str])] = &[
+    ("blend", "width", "follow", &["balance", "brightness"]),
+    ("blend", "slow", "follow", &["tempo"]),
+    ("blend", "fast", "follow", &["tempo"]),
+    ("blend", "sensitivity", "follow", &["tempo"]),
+];
+
 fn schema(info: &EffectInfo, key: &str, default: &Param) -> Value {
-    match default {
+    let mut described = match default {
         Param::Colors(_) => json!({"type": "colors"}),
         Param::Steps(_) => json!({"type": "steps", "most": MAX_STEPS, "easings": EASINGS}),
         Param::Color(fallback) => json!({"type": "color", "optional": fallback.is_none()}),
+        Param::Choice { options, .. } => json!({"type": "choice", "options": options}),
         Param::Number(_) => {
             let (low, high, step) = info
                 .ranges
@@ -756,7 +814,12 @@ fn schema(info: &EffectInfo, key: &str, default: &Param) -> Value {
                 .unwrap_or_else(|| range(key));
             json!({"type": "number", "min": low, "max": high, "step": step})
         }
+    };
+    let only = ONLY_WHEN.iter().find(|(effect, param, ..)| *effect == info.name && *param == key);
+    if let (Some((.., decides, values)), Some(object)) = (only, described.as_object_mut()) {
+        object.insert("when".to_string(), json!({ *decides: values }));
     }
+    described
 }
 
 /// The catalog as plain data, for listings and for front ends that build their controls from it.
@@ -814,12 +877,31 @@ mod tests {
 
     #[test]
     fn an_old_name_still_runs_what_it_became() {
-        assert_eq!(lookup("beathue").unwrap().name, "music");
-        let resolved = resolve("beathue", Some(&params(json!({"step": 90})))).unwrap();
-        assert_eq!(resolved["step"], Param::Number(90.0));
-        assert_eq!(resolved["color"], Param::Color(None));
         let sources = Sources { audio: Some(AudioSource::new(audio::monotonic())), screen: None };
-        assert!(create("beathue", None, &sources).is_ok());
+        for (old, now) in [("beathue", "music"), ("stereo", "blend"), ("centroid", "blend"), ("tempo", "blend")] {
+            assert_eq!(lookup(old).unwrap().name, now, "{old}");
+            assert!(create(old, None, &sources).is_ok(), "{old}");
+        }
+        // the old name brings what it stood for, and what the caller gives still wins
+        let resolved = resolve("beathue", Some(&params(json!({"step": 90})))).unwrap();
+        assert_eq!((&resolved["step"], &resolved["floor"]), (&Param::Number(90.0), &Param::Number(0.1)));
+        let resolved = resolve("tempo", Some(&params(json!({"smoothing": 0.85})))).unwrap();
+        assert_eq!(resolved["follow"], Param::choice(&FOLLOWS, "tempo"));
+        assert_eq!(resolved["smoothing"], Param::Number(0.85));
+        assert_eq!(resolved["low"], Param::Color(Some(audio::TEMPO_SLOW)));
+        assert!(resolve("blend", Some(&params(json!({"follow": "mood"})))).is_err());
+    }
+
+    #[test]
+    fn canonical_hands_on_the_name_and_what_it_stood_for() {
+        let given = params(json!({"smoothing": 0.85}));
+        let (name, carried) = canonical("tempo", &given);
+        assert_eq!(name, "blend");
+        assert_eq!(carried["follow"], "tempo");
+        assert_eq!(carried["smoothing"], 0.85); // the caller's, not the preset's 2.0
+        assert_eq!(carried["high"], audio::TEMPO_FAST.to_hex());
+        // a name the catalog lists is handed back untouched
+        assert_eq!(canonical("blend", &given), ("blend".to_string(), given));
     }
 
     #[test]
@@ -857,7 +939,7 @@ mod tests {
     fn describe_is_plain_data_covering_every_effect() {
         let described = describe();
         let all = described.as_array().unwrap();
-        assert_eq!(all.len(), 27);
+        assert_eq!(all.len(), 25);
         let names: Vec<&str> = all.iter().map(|e| e["name"].as_str().unwrap()).collect();
         assert_eq!(
             names,
@@ -877,9 +959,7 @@ mod tests {
                 "music",
                 "spectrum",
                 "volume",
-                "stereo",
-                "tempo",
-                "centroid",
+                "blend",
                 "drop",
                 "ambient",
                 "bands",
@@ -900,8 +980,9 @@ mod tests {
         assert_eq!(of("screencut")["schema"]["flash"]["max"], 1.0); // not the seconds that drop's flash lasts
         assert_eq!(of("screenhue")["schema"]["saturation"]["max"], 1.0);
         let range = |key: &str| all.iter().find_map(|e| e["schema"].get(key)).unwrap().clone();
-        assert_eq!(range("slow"), json!({"type": "number", "min": 40.0, "max": 240.0, "step": 1.0}));
-        assert_eq!(range("fast"), json!({"type": "number", "min": 40.0, "max": 240.0, "step": 1.0}));
+        let bpm = json!({"type": "number", "min": 40.0, "max": 240.0, "step": 1.0, "when": {"follow": ["tempo"]}});
+        assert_eq!(range("slow"), bpm);
+        assert_eq!(range("fast"), bpm);
         assert_eq!(range("flash"), json!({"type": "number", "min": 0.1, "max": 2.0, "step": 0.05}));
         assert_eq!(range("build"), json!({"type": "number", "min": 0.5, "max": 10.0, "step": 0.5}));
         let music = all.iter().find(|e| e["name"] == "music").unwrap();
@@ -912,6 +993,16 @@ mod tests {
         assert_eq!(music["schema"]["step"], json!({"type": "number", "min": 1.0, "max": 180.0, "step": 1.0}));
         assert_eq!(music["params"]["floor"], 0.0); // dark between beats, as it always was
         assert!(!all.iter().any(|e| e["name"] == "beathue")); // it became a setting of music
+        let blend = of("blend");
+        assert_eq!(blend["schema"]["follow"], json!({"type": "choice", "options": ["balance", "brightness", "tempo"]}));
+        assert_eq!(blend["params"]["follow"], "balance"); // what stereo was
+                                                          // what only applies to one of them says so, so a front end can leave it out
+        assert_eq!(blend["schema"]["width"]["when"], json!({"follow": ["balance", "brightness"]}));
+        assert_eq!(blend["schema"]["sensitivity"]["when"], json!({"follow": ["tempo"]}));
+        assert_eq!(blend["schema"]["release"].get("when"), None); // this one always applies
+        for gone in ["stereo", "tempo", "centroid"] {
+            assert!(!all.iter().any(|e| e["name"] == gone), "{gone}"); // they became settings of blend
+        }
         let screen = all.iter().find(|e| e["name"] == "screen").unwrap();
         assert_eq!(screen["schema"]["saturation"]["max"], 3.0);
         assert_eq!(screen["also"], Value::Null);

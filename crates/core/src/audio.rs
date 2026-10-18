@@ -36,17 +36,15 @@ const BEAT_GAP: f64 = 0.15;
 /// A beat needs the bass above this fraction of its recent peak.
 const BEAT_FLOOR: f64 = 0.05;
 const ONSET_CAP: f64 = 100.0;
-/// Seconds for the stereo position to settle.
-const PAN_SMOOTHING: f64 = 0.15;
+/// Seconds a blended position takes to settle, unless an effect asks for another.
+pub const PAN_SMOOTHING: f64 = 0.15;
 const DARK: f64 = 1.0 / 255.0;
-const TEMPO_SLOW: Color = Color::rgb(255, 60, 0);
-const TEMPO_FAST: Color = Color::rgb(0, 160, 255);
+pub const TEMPO_SLOW: Color = Color::rgb(255, 60, 0);
+pub const TEMPO_FAST: Color = Color::rgb(0, 160, 255);
 /// Seconds between beats that count as a tempo: 240 to 40 bpm.
 const TEMPO_INTERVALS: (f64, f64) = (0.25, 1.5);
 /// Share of a new interval in the estimate.
 const TEMPO_BLEND: f64 = 0.3;
-/// Brightness falls this much per second.
-const TEMPO_RELEASE: f64 = 3.0;
 /// Seconds; the long average the lull is measured against.
 const DROP_SLOW: f64 = 8.0;
 /// A lull: the short average under this share of the long one.
@@ -411,104 +409,118 @@ pub fn music_beat(
     }))
 }
 
-/// Warm for slow music, cool for fast; brightness follows the loudness.
+/// What the colour of [`music_blend`] follows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Follow {
+    /// Where the sound sits between left and right.
+    Balance,
+    /// Whether the weight of the sound lies in the bass or in the treble.
+    Brightness,
+    /// How fast the beats come.
+    Tempo,
+}
+
+/// The names [`Follow`] goes by, in the order front ends offer them.
+pub const FOLLOWS: [&str; 3] = ["balance", "brightness", "tempo"];
+
+impl Follow {
+    pub fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "balance" => Follow::Balance,
+            "brightness" => Follow::Brightness,
+            "tempo" => Follow::Tempo,
+            _ => return None,
+        })
+    }
+}
+
+/// How [`music_blend`] reads the sound and moves between its two colours.
+#[derive(Debug, Clone, Copy)]
+pub struct Blend {
+    /// What the colour follows.
+    pub follow: Follow,
+    /// The colour at the low end of what is followed, and at the high end.
+    pub low: Color,
+    pub high: Color,
+    /// How far a balance or a brightness is stretched before it reaches an end.
+    /// Real music seldom leans far either way, so the measured position needs room.
+    pub width: f64,
+    /// The tempos (bpm) shown as `low` and as `high`.
+    pub slow: f64,
+    pub fast: f64,
+    /// Seconds the colour takes to settle on a new position.
+    pub smoothing: f64,
+    /// How fast the brightness falls after a loud moment, per second.
+    pub release: f64,
+}
+
+/// Blend between two colours by one measurement of the sound; brightness follows the loudness.
 ///
-/// The tempo is estimated from the gaps between beats. `slow` and `fast` (bpm) are the
-/// tempos shown as the warm and the cool end, `smoothing` the seconds the colour takes to settle.
-pub fn music_tempo(
-    source: Arc<AudioSource>,
-    slow: f64,
-    fast: f64,
-    smoothing: f64,
-    delay: f64,
-    sensitivity: f64,
-) -> Result<Effect> {
+/// The three measurements sit on the same machine: `follow` picks which one moves the colour.
+/// Silence says nothing about the position, so the last one is kept until a sound comes back.
+pub fn music_blend(source: Arc<AudioSource>, blend: Blend, delay: f64, sensitivity: f64) -> Result<Effect> {
+    let Blend { follow, low, high, width, slow, fast, smoothing, release } = blend;
+    if width <= 0.0 {
+        return Err(invalid("width must be positive"));
+    }
     if slow >= fast {
         return Err(invalid("slow must be below fast"));
     }
     if smoothing < 0.0 {
         return Err(invalid("smoothing must not be negative"));
     }
+    if release <= 0.0 {
+        return Err(invalid("release must be positive"));
+    }
     source.set_delay(delay)?;
     source.set_sensitivity(sensitivity)?;
     let mut estimate: Option<f64> = None; // seconds between beats
     let mut previous: Option<f64> = None;
     let mut seen = source.heard().beats;
-    let mut position = 0.5f64;
+    let mut position = if follow == Follow::Brightness { 0.0 } else { 0.5 };
     let mut shown = 0.0f64;
     let mut last = 0.0;
     Ok(Box::new(move |t| {
         let step = (t - last).max(0.0);
         last = t;
         let heard = source.heard();
-        if heard.beats != seen {
-            if heard.beats > seen {
-                if let Some(before) = previous {
-                    let interval = (heard.last_beat - before) / (heard.beats - seen) as f64;
-                    if (TEMPO_INTERVALS.0..=TEMPO_INTERVALS.1).contains(&interval) {
-                        estimate = Some(match estimate {
-                            Some(old) => (1.0 - TEMPO_BLEND) * old + TEMPO_BLEND * interval,
-                            None => interval,
-                        });
-                    }
-                }
-            }
-            seen = heard.beats;
-            previous = Some(heard.last_beat);
-        }
-        let target = match estimate {
-            Some(interval) => ((60.0 / interval - slow) / (fast - slow)).clamp(0.0, 1.0),
-            None => 0.5,
-        };
-        if smoothing > 0.0 {
-            position += (target - position) * (1.0 - (-step / smoothing).exp());
-        } else {
-            position = target;
-        }
-        shown = heard.levels.loudness().max(shown - TEMPO_RELEASE * step);
-        let level = shown * shown;
-        if level < DARK {
-            return OFF;
-        }
-        TEMPO_SLOW.mix(&TEMPO_FAST, position).scaled(level)
-    }))
-}
-
-/// Blend between two colours by where the sound's weight lies between bass and treble.
-///
-/// The weight of real music seldom passes the middle, so `width` stretches it.
-/// Brightness follows the loudness.
-pub fn music_centroid(
-    source: Arc<AudioSource>,
-    low: Color,
-    high: Color,
-    width: f64,
-    release: f64,
-    delay: f64,
-) -> Result<Effect> {
-    if width <= 0.0 {
-        return Err(invalid("width must be positive"));
-    }
-    source.set_delay(delay)?;
-    let mut shown = 0.0f64;
-    let mut position = 0.0f64;
-    let mut last = 0.0;
-    Ok(Box::new(move |t| {
-        let step = (t - last).max(0.0);
-        last = t;
-        let levels = source.heard().levels;
-        let total = levels.bass + levels.mid + levels.treble;
+        let levels = heard.levels;
+        let loudness = levels.loudness();
         let faded = (shown - release * step).max(0.0);
-        if total > 0.0 {
-            // silence says nothing about the weight, keep the last one
-            let target = (width * (0.5 * levels.mid + levels.treble) / total).clamp(0.0, 1.0);
-            if faded * faded < DARK {
-                position = target;
+        let target = match follow {
+            Follow::Balance => (loudness > 0.0).then(|| (0.5 + 0.5 * width * levels.balance).clamp(0.0, 1.0)),
+            Follow::Brightness => {
+                let total = levels.bass + levels.mid + levels.treble;
+                (total > 0.0).then(|| (width * (0.5 * levels.mid + levels.treble) / total).clamp(0.0, 1.0))
+            }
+            Follow::Tempo => {
+                if heard.beats != seen {
+                    if heard.beats > seen {
+                        if let Some(before) = previous {
+                            let interval = (heard.last_beat - before) / (heard.beats - seen) as f64;
+                            if (TEMPO_INTERVALS.0..=TEMPO_INTERVALS.1).contains(&interval) {
+                                estimate = Some(match estimate {
+                                    Some(old) => (1.0 - TEMPO_BLEND) * old + TEMPO_BLEND * interval,
+                                    None => interval,
+                                });
+                            }
+                        }
+                    }
+                    seen = heard.beats;
+                    previous = Some(heard.last_beat);
+                }
+                // until a tempo is heard the colour waits where it started
+                estimate.map(|interval| ((60.0 / interval - slow) / (fast - slow)).clamp(0.0, 1.0))
+            }
+        };
+        if let Some(target) = target {
+            if faded * faded < DARK || smoothing <= 0.0 {
+                position = target; // out of the dark a sound starts where it is
             } else {
-                position += (target - position) * (1.0 - (-step / PAN_SMOOTHING).exp());
+                position += (target - position) * (1.0 - (-step / smoothing).exp());
             }
         }
-        shown = levels.loudness().max(faded);
+        shown = loudness.max(faded);
         let level = shown * shown;
         if level >= DARK {
             low.mix(&high, position).scaled(level)
@@ -649,49 +661,6 @@ pub fn music_volume(source: Arc<AudioSource>, color: Color, release: f64, floor:
         let level = floor + (1.0 - floor) * shown * shown;
         if level >= DARK {
             color.scaled(level)
-        } else {
-            OFF
-        }
-    }))
-}
-
-/// Blend between two colours by where the sound sits; brightness follows the loudness.
-///
-/// Music rarely leans far to one side, so `width` stretches the measured position.
-pub fn music_stereo(
-    source: Arc<AudioSource>,
-    left: Color,
-    right: Color,
-    width: f64,
-    release: f64,
-    delay: f64,
-) -> Result<Effect> {
-    source.set_delay(delay)?;
-    if width <= 0.0 {
-        return Err(invalid("width must be positive"));
-    }
-    let mut shown = 0.0f64;
-    let mut position = 0.5f64;
-    let mut last = 0.0;
-    Ok(Box::new(move |t| {
-        let step = (t - last).max(0.0);
-        last = t;
-        let levels = source.heard().levels;
-        let loudness = levels.loudness();
-        let faded = (shown - release * step).max(0.0);
-        if loudness > 0.0 {
-            // silence says nothing about the position, keep the last one
-            let target = (0.5 + 0.5 * width * levels.balance).clamp(0.0, 1.0);
-            if faded * faded < DARK {
-                position = target; // out of the dark a sound starts where it is
-            } else {
-                position += (target - position) * (1.0 - (-step / PAN_SMOOTHING).exp());
-            }
-        }
-        shown = loudness.max(faded);
-        let level = shown * shown;
-        if level >= DARK {
-            left.mix(&right, position).scaled(level)
         } else {
             OFF
         }
@@ -947,12 +916,18 @@ mod tests {
         }
     }
 
+    /// A blend of `low` and `high` with the timings the three old effects shared.
+    fn blending(follow: Follow, low: Color, high: Color) -> Blend {
+        Blend { follow, low, high, width: 1.0, slow: 80.0, fast: 120.0, smoothing: PAN_SMOOTHING, release: 2.0 }
+    }
+
     #[test]
-    fn tempo_colours_by_how_fast_the_beats_come() {
+    fn blend_colours_by_how_fast_the_beats_come() {
         let (clock, now) = manual_clock();
         let source = AudioSource::new(clock);
         let loud = Levels { bass: 1.0, ..Levels::default() };
-        let mut effect = music_tempo(source.clone(), 80.0, 120.0, 0.0, 0.0, 0.5).unwrap();
+        let tempo = Blend { smoothing: 0.0, release: 3.0, ..blending(Follow::Tempo, TEMPO_SLOW, TEMPO_FAST) };
+        let mut effect = music_blend(source.clone(), tempo, 0.0, 0.5).unwrap();
         set(&now, 10.0);
         source.publish(loud, 10.0);
         effect(0.0); // the first beat gives no interval yet
@@ -968,7 +943,7 @@ mod tests {
         set(&now, 30.0);
         assert_eq!(effect(20.0), Color::rgb(0, 160, 255)); // without beats the estimate holds
 
-        let mut slow = music_tempo(source.clone(), 80.0, 120.0, 0.0, 0.0, 0.5).unwrap();
+        let mut slow = music_blend(source.clone(), tempo, 0.0, 0.5).unwrap();
         set(&now, 40.0);
         source.publish(loud, 10.0);
         slow(0.0);
@@ -978,11 +953,12 @@ mod tests {
     }
 
     #[test]
-    fn tempo_reads_beats_that_arrive_between_two_frames() {
+    fn blend_reads_beats_that_arrive_between_two_frames() {
         let (clock, now) = manual_clock();
         let source = AudioSource::new(clock);
         let loud = Levels { bass: 1.0, ..Levels::default() };
-        let mut effect = music_tempo(source.clone(), 80.0, 120.0, 0.0, 0.0, 0.5).unwrap();
+        let tempo = Blend { smoothing: 0.0, release: 3.0, ..blending(Follow::Tempo, TEMPO_SLOW, TEMPO_FAST) };
+        let mut effect = music_blend(source.clone(), tempo, 0.0, 0.5).unwrap();
         set(&now, 10.0);
         source.publish(loud, 10.0);
         effect(0.0);
@@ -994,40 +970,28 @@ mod tests {
     }
 
     #[test]
-    fn tempo_is_dark_in_silence_and_refuses_what_does_not_fit() {
-        let (clock, _) = manual_clock();
-        let source = AudioSource::new(clock);
-        let mut effect = music_tempo(source.clone(), 80.0, 160.0, 2.0, 0.0, 0.5).unwrap();
-        assert_eq!(effect(0.0), OFF);
-        for (slow, fast, smoothing, sensitivity) in
-            [(120.0, 120.0, 2.0, 0.5), (160.0, 80.0, 2.0, 0.5), (80.0, 160.0, -1.0, 0.5), (80.0, 160.0, 2.0, 2.0)]
-        {
-            assert!(music_tempo(source.clone(), slow, fast, smoothing, 0.0, sensitivity).is_err());
-        }
-    }
-
-    #[test]
-    fn tempo_ignores_beats_from_before_it_started() {
+    fn blend_ignores_beats_from_before_it_started() {
         let (clock, now) = manual_clock();
         let source = AudioSource::new(clock);
         let loud = Levels { bass: 1.0, ..Levels::default() };
         set(&now, 10.0);
         source.publish(loud, 10.0); // beat before the effect exists
-        let mut effect = music_tempo(source.clone(), 80.0, 120.0, 0.0, 0.0, 0.5).unwrap();
-        effect(0.0); // trigger the first frame (no beat change yet, seen matches heard.beats)
+        let tempo = Blend { smoothing: 0.0, release: 3.0, ..blending(Follow::Tempo, TEMPO_SLOW, TEMPO_FAST) };
+        let mut effect = music_blend(source.clone(), tempo, 0.0, 0.5).unwrap();
+        effect(0.0); // the first frame sees no beat change yet
         set(&now, 10.5);
-        source.publish(loud, 10.0); // first beat change seen by effect: previous is set to 10.0, no interval calculated
-        assert_ne!(effect(0.5), Color::rgb(0, 160, 255)); // not fast yet (first interval needs two beats after effect started)
+        source.publish(loud, 10.0); // the first change only sets previous, there is no interval
+        assert_ne!(effect(0.5), Color::rgb(0, 160, 255));
         set(&now, 11.0);
-        source.publish(loud, 10.0); // second beat change: now interval = (11.0 - 10.5) / 1 = 0.5s
+        source.publish(loud, 10.0); // now there are two beats to measure between
         assert_eq!(effect(1.0), Color::rgb(0, 160, 255)); // 120 bpm is the fast end
     }
 
     #[test]
-    fn centroid_blends_by_where_the_weight_lies() {
+    fn blend_follows_where_the_weight_lies() {
         let (clock, _) = manual_clock();
         let source = AudioSource::new(clock);
-        let mut effect = music_centroid(source.clone(), RED, BLUE, 1.0, 2.0, 0.0).unwrap();
+        let mut effect = music_blend(source.clone(), blending(Follow::Brightness, RED, BLUE), 0.0, 0.5).unwrap();
         assert_eq!(effect(0.0), OFF); // silent: dark, and no division by zero
         source.publish(Levels { bass: 1.0, ..Levels::default() }, 0.0);
         assert_eq!(effect(1.0), Color::rgb(255, 0, 0));
@@ -1042,11 +1006,36 @@ mod tests {
     }
 
     #[test]
-    fn centroid_refuses_what_does_not_fit() {
+    fn blend_follows_the_balance_between_the_sides() {
         let (clock, _) = manual_clock();
         let source = AudioSource::new(clock);
-        assert!(music_centroid(source.clone(), RED, BLUE, 0.0, 3.0, 0.0).is_err());
-        assert!(music_centroid(source.clone(), RED, BLUE, 2.0, 3.0, 5.0).is_err());
+        let wide = Blend { width: 2.0, ..blending(Follow::Balance, BLUE, RED) };
+        let mut effect = music_blend(source.clone(), wide, 0.0, 0.5).unwrap();
+        assert_eq!(effect(0.0), OFF);
+        source.publish(Levels { bass: 1.0, balance: -0.5, ..Levels::default() }, 0.0);
+        assert_eq!(effect(1.0), BLUE); // hard left, stretched to the end
+        source.publish(Levels { bass: 1.0, balance: 0.5, ..Levels::default() }, 0.0);
+        assert_eq!(effect(2.0), RED); // and hard right
+    }
+
+    #[test]
+    fn blend_is_dark_in_silence_and_refuses_what_does_not_fit() {
+        let (clock, _) = manual_clock();
+        let source = AudioSource::new(clock);
+        let good = blending(Follow::Tempo, TEMPO_SLOW, TEMPO_FAST);
+        let mut effect = music_blend(source.clone(), good, 0.0, 0.5).unwrap();
+        assert_eq!(effect(0.0), OFF);
+        for (blend, delay, sensitivity) in [
+            (Blend { width: 0.0, ..good }, 0.0, 0.5),
+            (Blend { slow: 120.0, fast: 120.0, ..good }, 0.0, 0.5),
+            (Blend { slow: 160.0, fast: 80.0, ..good }, 0.0, 0.5),
+            (Blend { smoothing: -1.0, ..good }, 0.0, 0.5),
+            (Blend { release: 0.0, ..good }, 0.0, 0.5),
+            (good, 5.0, 0.5),
+            (good, 0.0, 2.0),
+        ] {
+            assert!(music_blend(source.clone(), blend, delay, sensitivity).is_err());
+        }
     }
 
     fn advance(effect: &mut Effect, t: &mut f64, seconds: f64) -> Color {

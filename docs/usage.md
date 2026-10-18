@@ -312,9 +312,7 @@ A screen agent sends `{"cmd": "screen", "color": "#rrggbb"}` whenever the colour
 | `music` | Flash on the beat, a new colour on each one unless you pick one | `color`, `decay`, `floor`, `step`, `saturation`, `delay`, `sensitivity` |
 | `spectrum` | Bass, mids and treble as red, green and blue | `release`, `delay` |
 | `volume` | One colour, as bright as the sound is loud | `color`, `release`, `floor`, `delay` |
-| `stereo` | Blend two colours by where the sound sits | `left`, `right`, `width`, `release`, `delay` |
-| `tempo` | Warm for slow music, cool for fast, by the gaps between beats | `slow`, `fast`, `smoothing`, `delay`, `sensitivity` |
-| `centroid` | Blend two colours by whether the sound is bass-heavy or bright | `low`, `high`, `width`, `release`, `delay` |
+| `blend` | Two colours, blended by one measurement of the sound | `follow`, `low`, `high`, `width`, `slow`, `fast`, `smoothing`, `release`, `delay`, `sensitivity` |
 | `drop` | Open up as the music builds, flash when it comes back in | `color`, `flash`, `build`, `delay`, `sensitivity` |
 | `ambient` | A calm colour that breathes, an accent on the beats | `base`, `accent`, `period`, `decay`, `delay`, `sensitivity` |
 | `bands` | The bass in one colour, the treble in another | `low`, `high`, `release`, `delay` |
@@ -358,7 +356,7 @@ chsmartbulb effect sunrise -s minutes=30
 
 ### Sound-reactive effects
 
-`music`, `spectrum`, `volume`, `stereo`, `tempo`, `centroid`, `drop`, `ambient`, `bands`, `energy`
+`music`, `spectrum`, `volume`, `blend`, `drop`, `ambient`, `bands`, `energy`
 and `chill` analyse the audio on the computer, taken from the monitor of the default output. It does not matter
 where the sound plays: laptop speakers, headphones, another Bluetooth device or the bulb itself.
 On Linux the capture needs the `parec` tool that comes with PulseAudio and PipeWire.
@@ -379,21 +377,32 @@ The never-dark version used to be an effect of its own called `beathue`. The nam
 `volume` ignores beats and follows the loudness in a single colour; `floor` keeps some light in
 the quiet parts.
 
-`stereo` shows `left` when the sound is on the left, `right` when it is on the right and a mix in
-between. Most music sits close to the middle, so `width` stretches the measured position; raise it
-if the colour barely moves, lower it if it only ever shows the two ends.
+`blend` moves between `low` and `high` by one measurement of the sound, which `follow` picks.
+Brightness follows the loudness in all three, `release` is how fast it falls, and `smoothing` is
+how long the colour takes to settle on a new position. Silence says nothing about the position,
+so the last one is kept until a sound comes back.
+
+- `balance`: where the sound sits between left and right. This was the `stereo` effect.
+- `brightness`: whether the weight of the sound lies in the bass or in the treble. This was
+  `centroid`.
+- `tempo`: how fast the beats come, from the gaps between them. `slow` and `fast` are the bpm
+  shown as `low` and as `high`, and `sensitivity` decides what counts as a beat. It is only as
+  good as the beat detection: music without a clear beat leaves it at the last tempo it heard.
+  This was the `tempo` effect.
+
+`balance` and `brightness` seldom lean far either way, so `width` stretches the measured position;
+raise it if the colour barely moves, lower it if it only ever shows the two ends. `width` does
+nothing for `tempo`, and `slow`, `fast` and `sensitivity` do nothing for the other two; the
+schema says so under `when`, so a front end can leave them out.
 
 ```bash
-chsmartbulb effect stereo -s left=00ffff -s right=ff00ff -s width=6
+chsmartbulb effect blend -s follow=balance -s low=00ffff -s high=ff00ff -s width=6
+chsmartbulb effect blend -s follow=tempo -s slow=70 -s fast=140
 ```
 
-`tempo` estimates the speed of the music from the gaps between beats and shows `slow` bpm as a warm
-colour and `fast` bpm as a cool one. It is only as good as the beat detection: music without a clear
-beat leaves it at the last tempo it heard. Brightness follows the loudness.
-
-`centroid` shows `low` for bass-heavy sound and `high` for bright sound; `width` stretches the
-measured position, as it does for `stereo`. Brightness follows the loudness, and `release` is how
-fast it falls.
+`stereo`, `centroid` and `tempo` still run and bring the colours and the width they had, so a
+saved effect and an old script keep working; they are no longer listed, and their own parameter
+names (`stereo`'s `left` and `right`) are now `low` and `high`.
 
 `drop` opens up slowly as the music gets louder and flashes in `color` for `flash` seconds when
 loud music comes back in after a lull, then settles to a glow. It remembers a lull for 30 seconds,
@@ -411,7 +420,6 @@ follows the sound as it is. `chill` never flashes: its colour walks around the w
 `period` seconds, and the brightness takes `smoothing` seconds to follow the loudness up or down.
 
 ```bash
-chsmartbulb effect tempo -s slow=70 -s fast=140
 chsmartbulb effect ambient -s base=ff6e14 -s accent=ffffff
 ```
 
@@ -437,8 +445,8 @@ chsmartbulb --host laptop.local --token SECRET --mic audio-agent
 
 A microphone also hears the room, so the steady noise of the room is estimated and taken off:
 the light reacts to what stands out of it. That estimate needs a second or two after starting,
-and music that never pauses slowly raises it, which costs some of the quiet passages. `stereo`
-needs a stereo microphone to show anything but the middle.
+and music that never pauses slowly raises it, which costs some of the quiet passages. A `blend`
+that follows the balance needs a stereo microphone to show anything but the middle.
 
 The capture hears the sound before a Bluetooth speaker or headphones play it, so the light runs
 ahead of what you hear. `delay` holds the light back by that many seconds (up to 2):
