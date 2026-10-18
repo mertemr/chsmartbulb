@@ -40,6 +40,14 @@
       // private browsing: remembered for this visit only
     }
   }
+  // a parameter that only applies for some values of another is left out while it does not
+  const fields = $derived(
+    Object.entries(info?.schema ?? {}).filter(([, schema]) =>
+      Object.entries(schema.when ?? {}).every(([other, allowed]) =>
+        allowed.includes(String(values.value[other] ?? info?.params[other])),
+      ),
+    ),
+  )
   const push = latest((request: { name: string; params: Params }) => app.send({ cmd: 'effect', ...request }))
 
   function start(effect: EffectInfo) {
@@ -92,7 +100,7 @@
           Reset to defaults
         </button>
       </div>
-      {#each Object.entries(info.schema) as [key, schema] (key)}
+      {#each fields as [key, schema] (key)}
         <ParamField
           name={key}
           {schema}

@@ -59,6 +59,25 @@
       />
     </div>
   </div>
+{:else if schema.type === 'choice'}
+  <fieldset>
+    <legend class="text-sm font-medium">{label}</legend>
+    <div class="mt-2 flex flex-wrap gap-2">
+      {#each schema.options as option (option)}
+        <button
+          type="button"
+          class={[
+            'h-10 rounded-lg border px-3 text-sm font-medium capitalize transition active:scale-95',
+            value === option ? 'border-accent text-accent bg-card' : 'border-line bg-card text-muted',
+          ]}
+          aria-pressed={value === option}
+          onclick={() => onchange(option)}
+        >
+          {option}
+        </button>
+      {/each}
+    </div>
+  </fieldset>
 {:else if schema.type === 'steps'}
   <StepsField {schema} steps={Array.isArray(value) ? (value as Step[]) : []} {onchange} />
 {:else}

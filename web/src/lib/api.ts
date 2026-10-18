@@ -38,11 +38,16 @@ export type State = {
   watchers: number // clients following the state, this page included
 }
 
-export type ParamSchema =
+export type ParamSchema = (
   | { type: 'number'; min: number; max: number; step: number }
   | { type: 'color'; optional: boolean }
   | { type: 'colors' }
   | { type: 'steps'; most: number; easings: string[] }
+  | { type: 'choice'; options: string[] }
+) & {
+  /** The parameter applies only while another parameter holds one of these values. */
+  when?: Record<string, string[]>
+}
 
 export type EffectInfo = {
   name: string
