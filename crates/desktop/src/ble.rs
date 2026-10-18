@@ -93,8 +93,11 @@ impl Writer for BleWriter {
 impl Connector for BleConnector {
     async fn connect(&self) -> Result<Arc<dyn Link>> {
         let peripheral = self.find().await?;
+        // Connected already may mean the Classic audio link; leave that up if BLE fails.
+        let mut ours = false;
         let opened = async {
             if !peripheral.is_connected().await.map_err(failed)? {
+                ours = true;
                 peripheral.connect().await.map_err(failed)?;
             }
             peripheral.discover_services().await.map_err(failed)?;
@@ -110,7 +113,9 @@ impl Connector for BleConnector {
         let (command, mut notifications) = match opened.await {
             Ok(opened) => opened,
             Err(error) => {
-                let _ = peripheral.disconnect().await;
+                if ours {
+                    let _ = peripheral.disconnect().await; // BlueZ drops every profile, audio too
+                }
                 return Err(Error::ConnectionFailed(format!("cannot connect to {} over BLE: {error}", self.address)));
             }
         };
